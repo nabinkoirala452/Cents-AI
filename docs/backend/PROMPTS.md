@@ -122,6 +122,24 @@ Report: files changed, commands + output, tests, deviations, open questions.
 
 ---
 
+## Phase 2 fixes — from review (do these before Phase 3)
+
+```
+Phase 2 review fixes. Read docs/backend/PROGRESS.md first. Do not overwrite server/.env.
+
+1. Honest audit evidence (important for the FinTechathon "operation logs"): the audit CSV export (GET /audit-events/export.csv) and GET /audit-events still return the seeded fake history, e.g. "INV-1056 confirmed as SENT via GET /v2/invoicing/invoices" — no such call ever happened. Fix at the source:
+   - The server seed must NOT insert the fake demo audit events any more (keep sample approvals; the audit log starts empty and fills with real events).
+   - Add a one-time data migration that removes the already-seeded demo rows (ids AU-2…AU-9 in workspace "centsai-demo"): inside that migration only, temporarily disable the append-only trigger (ALTER TABLE "AuditEvent" DISABLE TRIGGER "AuditEvent_append_only"), delete exactly those ids, then ENABLE it again. Add a SQL comment explaining why.
+   - Remove the "Sample · …" relabelling hack from loadState() (no longer needed).
+   - Test: after seeding, neither the audit list nor the CSV export contains "via GET" or any PayPal claim.
+2. Idempotency race: today two concurrent requests with the same Idempotency-Key both run (the key is only stored after the response). Reserve the key BEFORE the handler runs: insert the row with responseStatus 0 in onRequest; if the insert hits the unique constraint and the stored row is still status 0 → reply 409 code "idempotency_in_progress"; on completion update the row with the real status/body. Do NOT keep responses with status >= 500 — delete the reservation so the client can retry. Test: two concurrent identical requests → exactly one executes; a 500 is not replayed.
+3. Login hardening: (a) when the email does not exist, still run bcrypt.compare against a fixed dummy hash so response time doesn't reveal which emails exist; (b) audit successful sign-ins ("Signed in", outcome info) in each of the user's workspaces; log failed sign-ins with the app logger (warn, include a sha256 of the lowercased email, never the password) — not in the audit table since there is no workspace context. Test (b).
+4. Validation: PATCH /workspace `timezone` must be a valid IANA zone (check with `new Intl.DateTimeFormat("en-US", { timeZone })` in a try/catch); `website` must be empty or an http(s) URL.
+5. Run server typecheck + tests and root `npx tsc --noEmit -p .`, then `npm run db:migrate` and `npm run db:seed`. Update docs/backend/PROGRESS.md and give me the Report.
+```
+
+---
+
 ## Phase 3 — Records CRUD and computed endpoints
 
 ```

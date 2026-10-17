@@ -10,6 +10,12 @@ import {
 } from "fastify-type-provider-zod"
 import { z } from "zod"
 import { config } from "./config"
+import { HttpError } from "./lib/errors"
+import { registerAuditRoutes } from "./modules/audit/routes"
+import { registerAuthRoutes } from "./modules/auth/routes"
+import { registerWorkspaceRoutes } from "./modules/workspace/routes"
+import { installAuth } from "./plugins/auth"
+import { installIdempotency } from "./plugins/idempotency"
 
 export async function buildApp() {
   const app = Fastify({
@@ -65,7 +71,9 @@ export async function buildApp() {
   })
 
   app.setErrorHandler((error: FastifyError, request, reply) => {
-    const status = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500
+    const applicationError = error instanceof HttpError ? error : undefined
+    const status = applicationError?.statusCode
+      ?? (error.statusCode && error.statusCode >= 400 ? error.statusCode : 500)
     const validationIssues = error.validation
       ? z.array(z.object({
           instancePath: z.string().optional(),
@@ -87,9 +95,9 @@ export async function buildApp() {
       .type("application/problem+json")
       .send({
         type: "about:blank",
-        title: status >= 500 ? "Internal Server Error" : error.name,
+        title: applicationError?.title ?? (status >= 500 ? "Internal Server Error" : error.name),
         status,
-        code: status >= 500 ? "INTERNAL_ERROR" : "REQUEST_ERROR",
+        code: applicationError?.code ?? (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_ERROR"),
         detail: status >= 500 && config.nodeEnv === "production"
           ? "An unexpected error occurred."
           : error.message,
@@ -111,6 +119,12 @@ export async function buildApp() {
   })
 
   app.get("/api/v1/health", async () => ({ status: "ok" }))
+
+  installAuth(app)
+  installIdempotency(app)
+  registerAuthRoutes(app)
+  registerWorkspaceRoutes(app)
+  registerAuditRoutes(app)
 
   return app
 }

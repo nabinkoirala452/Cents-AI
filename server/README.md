@@ -64,3 +64,34 @@ demo reset endpoint.
 
 The Vite development server uses `http://localhost:8443`; set `CORS_ORIGIN` to
 that origin when running the frontend locally.
+
+## Authentication and workspace access
+
+`POST /api/v1/auth/login` accepts `{ "email": "...", "password": "..." }`
+and returns an HS256 bearer token (8-hour expiry), the user profile, and the
+workspaces the user belongs to. Protected API requests send both
+`Authorization: Bearer <token>` and `X-Workspace-Id`. Workspace membership is
+resolved from the verified token; a caller cannot select a workspace without
+being a member. The login route is limited to 10 attempts per minute per IP.
+
+`GET /api/v1/me` returns the signed-in profile and memberships.
+`GET /api/v1/workspace/state` returns the frontend State for the selected
+workspace and caller role. Workspace and preference changes use
+`PATCH /api/v1/workspace` and `PATCH /api/v1/settings`; for example, role
+changes are submitted as an Owner with
+`{ "team": [{ "email": "viewer@centsai.demo", "role": "Finance Manager" }] }`.
+The `managerApprovalLimit` and `team` fields are Owner-only. The
+`PUT /api/v1/settings/dismissed-insights` body is
+`{ "dismissedInsights": ["insight-id"] }` and is available to any member.
+
+Every successful workspace mutation inserts an append-only audit event in the
+same database transaction. Members can read the scoped event feed at
+`GET /api/v1/audit-events?limit=50&cursor=...&ref=...` or export it as CSV at
+`GET /api/v1/audit-events/export.csv`. CSV formula-leading cells are prefixed
+with an apostrophe. POST, PATCH, PUT, and DELETE requests may include an
+`Idempotency-Key`; reusing the same key on the same route replays the first
+stored status and JSON body for 24 hours, while reusing a key for another
+route or authenticated user/role context returns 409.
+
+API errors use `application/problem+json`. A role denial has status 403 and
+code `forbidden_role`; missing or invalid bearer tokens return a generic 401.

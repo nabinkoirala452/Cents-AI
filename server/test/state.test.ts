@@ -3,6 +3,8 @@ import { cashBalance, createSeed, forecastAll, invoiceTotal, receivables, todayI
 import { prisma } from "../src/db"
 import { DEMO_WORKSPACE_ID, seedDemoWorkspace } from "../prisma/seed"
 import { loadState } from "../src/lib/state"
+import { buildApp } from "../src/app"
+import { audit } from "../src/modules/audit/service"
 
 describe("loadState", () => {
   beforeAll(async () => {
@@ -72,6 +74,9 @@ describe("loadState", () => {
     await expect(prisma.auditEvent.updateMany({
       where: { workspaceId: DEMO_WORKSPACE_ID, id: "AU-9" },
       data: { detail: "must not update" },
+    })).rejects.toThrow()
+    await expect(prisma.auditEvent.deleteMany({
+      where: { workspaceId: DEMO_WORKSPACE_ID, id: "AU-9" },
     })).rejects.toThrow()
 
     await expect(prisma.approval.create({
@@ -165,6 +170,224 @@ describe("loadState", () => {
         `
         expect(canSelect, `anon SELECT privilege on ${tableName}`).toBe(false)
       }
+    }
+  })
+
+  it("authenticates users, enforces workspace roles, audits writes, and replays idempotent responses", async () => {
+    vi.useRealTimers()
+    const app = await buildApp()
+    try {
+      const login = async (email: string, password = "test-only-password") =>
+        app.inject({
+          method: "POST",
+          url: "/api/v1/auth/login",
+          payload: { email, password },
+        })
+
+      const ownerLogin = await login("owner@centsai.demo")
+      const financeLogin = await login("finance@centsai.demo")
+      const viewerLogin = await login("viewer@centsai.demo")
+      expect(ownerLogin.statusCode).toBe(200)
+      expect(financeLogin.statusCode).toBe(200)
+      expect(viewerLogin.statusCode).toBe(200)
+
+      const owner = ownerLogin.json()
+      const finance = financeLogin.json()
+      const viewer = viewerLogin.json()
+      expect(owner.user.email).toBe("owner@centsai.demo")
+      expect(owner.workspaces).toContainEqual({
+        id: DEMO_WORKSPACE_ID,
+        name: createSeed().settings.agencyName,
+        role: "Owner",
+      })
+      const headers = (token: string, workspaceId = DEMO_WORKSPACE_ID) => ({
+        authorization: `Bearer ${token}`,
+        "x-workspace-id": workspaceId,
+      })
+
+      const unknownUser = await login("missing@centsai.demo", "wrong")
+      const wrongPassword = await login("owner@centsai.demo", "wrong")
+      expect(unknownUser.statusCode).toBe(401)
+      expect(unknownUser.json()).toEqual(wrongPassword.json())
+      expect(JSON.stringify(unknownUser.json())).not.toContain("missing@centsai.demo")
+
+      expect((await app.inject({ method: "GET", url: "/api/v1/workspace/state" })).statusCode).toBe(401)
+      expect((await app.inject({
+        method: "GET",
+        url: "/api/v1/workspace/state",
+        headers: headers("not-a-jwt"),
+      })).statusCode).toBe(401)
+      expect((await app.inject({
+        method: "GET",
+        url: "/api/v1/workspace/state",
+        headers: headers(owner.token, "not-a-member-workspace"),
+      })).statusCode).toBe(404)
+
+      for (const session of [owner, finance, viewer]) {
+        const sessionHeaders = headers(session.token)
+        expect((await app.inject({
+          method: "GET",
+          url: "/api/v1/me",
+          headers: sessionHeaders,
+        })).statusCode).toBe(200)
+        expect((await app.inject({
+          method: "GET",
+          url: "/api/v1/workspace/state",
+          headers: sessionHeaders,
+        })).statusCode).toBe(200)
+        expect((await app.inject({
+          method: "GET",
+          url: "/api/v1/audit-events?limit=1",
+          headers: sessionHeaders,
+        })).statusCode).toBe(200)
+      }
+
+      const originalWorkspaceName = createSeed().settings.agencyName
+      const viewerPatch = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/workspace",
+        headers: headers(viewer.token),
+        payload: { name: "Viewer cannot change this" },
+      })
+      expect(viewerPatch.statusCode).toBe(403)
+      expect(viewerPatch.json().code).toBe("forbidden_role")
+
+      const managerPatch = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/workspace",
+        headers: headers(finance.token),
+        payload: { name: "CentsAI API integration test" },
+      })
+      expect(managerPatch.statusCode).toBe(200)
+      expect(managerPatch.json().name).toBe("CentsAI API integration test")
+
+      const settingBefore = await prisma.workspaceSettings.findUniqueOrThrow({
+        where: { workspaceId: DEMO_WORKSPACE_ID },
+      })
+      const managerSettings = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        headers: { ...headers(finance.token), "idempotency-key": "settings-replay-test" },
+        payload: { safetyThreshold: 13_000 },
+      })
+      expect(managerSettings.statusCode).toBe(200)
+      expect(managerSettings.json().safetyThreshold).toBe(13_000)
+      const replay = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        headers: { ...headers(finance.token), "idempotency-key": "settings-replay-test" },
+        payload: { safetyThreshold: 14_000 },
+      })
+      expect(replay.statusCode).toBe(managerSettings.statusCode)
+      expect(replay.json()).toEqual(managerSettings.json())
+      const crossUserReplay = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        headers: { ...headers(viewer.token), "idempotency-key": "settings-replay-test" },
+        payload: { safetyThreshold: 13_000 },
+      })
+      expect(crossUserReplay.statusCode).toBe(409)
+      expect((await prisma.workspaceSettings.findUniqueOrThrow({
+        where: { workspaceId: DEMO_WORKSPACE_ID },
+      })).safetyThreshold.toNumber()).toBe(13_000)
+
+      const wrongRouteReplay = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/workspace",
+        headers: { ...headers(finance.token), "idempotency-key": "settings-replay-test" },
+        payload: { name: "Must conflict" },
+      })
+      expect(wrongRouteReplay.statusCode).toBe(409)
+      expect(wrongRouteReplay.json().code).toBe("idempotency_conflict")
+
+      const managerLimit = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        headers: headers(finance.token),
+        payload: { managerApprovalLimit: 7000 },
+      })
+      expect(managerLimit.statusCode).toBe(403)
+      expect(managerLimit.json().code).toBe("forbidden_role")
+      const viewerSettings = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        headers: headers(viewer.token),
+        payload: { safetyThreshold: 12_000 },
+      })
+      expect(viewerSettings.statusCode).toBe(403)
+
+      const ownerLimit = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        headers: headers(owner.token),
+        payload: { managerApprovalLimit: 7000 },
+      })
+      expect(ownerLimit.statusCode).toBe(200)
+      const managerTeam = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        headers: headers(finance.token),
+        payload: { team: [{ email: "viewer@centsai.demo", role: "Finance Manager" }] },
+      })
+      expect(managerTeam.statusCode).toBe(403)
+      const ownerTeam = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        headers: headers(owner.token),
+        payload: { team: [{ email: "viewer@centsai.demo", role: "Finance Manager" }] },
+      })
+      expect(ownerTeam.statusCode).toBe(200)
+
+      const dismiss = await app.inject({
+        method: "PUT",
+        url: "/api/v1/settings/dismissed-insights",
+        headers: headers(viewer.token),
+        payload: { dismissedInsights: ["cash-gap"] },
+      })
+      expect(dismiss.statusCode).toBe(200)
+
+      await audit({
+        userId: viewer.user.id,
+        userName: viewer.user.name,
+        workspaceId: DEMO_WORKSPACE_ID,
+        role: "Viewer",
+        requestId: "csv-test",
+      }, {
+        actor: "=SUM(1,1)",
+        action: "CSV formula guard test",
+        detail: "+unsafe",
+        outcome: "info",
+      })
+      const csv = await app.inject({
+        method: "GET",
+        url: "/api/v1/audit-events/export.csv",
+        headers: headers(viewer.token),
+      })
+      expect(csv.statusCode).toBe(200)
+      expect(csv.headers["content-type"]).toContain("text/csv")
+      expect(csv.body).toContain("\"'=SUM(1,1)\"")
+      expect(csv.body).toContain("\"'+unsafe\"")
+
+      const restoreWorkspace = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/workspace",
+        headers: headers(owner.token),
+        payload: { name: originalWorkspaceName },
+      })
+      expect(restoreWorkspace.statusCode).toBe(200)
+      const restoreSettings = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        headers: headers(owner.token),
+        payload: {
+          managerApprovalLimit: settingBefore.managerApprovalLimit.toNumber(),
+          safetyThreshold: settingBefore.safetyThreshold.toNumber(),
+          team: [{ email: "viewer@centsai.demo", role: "Viewer" }],
+        },
+      })
+      expect(restoreSettings.statusCode).toBe(200)
+    } finally {
+      await app.close()
     }
   })
 })
