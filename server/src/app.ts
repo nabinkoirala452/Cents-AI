@@ -61,6 +61,20 @@ export async function buildApp() {
   app.setValidatorCompiler(validatorCompiler)
   app.setSerializerCompiler(serializerCompiler)
 
+  app.addHook("preParsing", (request, _reply, payload, done) => {
+    const routeConfig = request.routeOptions.config as { allowEmptyBody?: boolean }
+    const contentLength = request.headers["content-length"]
+    if (
+      routeConfig.allowEmptyBody
+      && (contentLength === undefined || contentLength === "0")
+      && request.headers["transfer-encoding"] === undefined
+      && request.headers["content-type"]?.split(";")[0] === "application/json"
+    ) {
+      delete request.headers["content-type"]
+    }
+    done(null, payload)
+  })
+
   await app.register(helmet)
   await app.register(cors, {
     origin: config.corsOrigins,

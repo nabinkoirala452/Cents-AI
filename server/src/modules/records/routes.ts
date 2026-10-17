@@ -206,12 +206,20 @@ const scenarioCreate = z.object({
   inputs: z.record(z.union([z.string().max(1000), z.number().finite()])),
 }).strict()
 const idParams = z.object({ id: string(100) }).strict()
-const noBody = z.union([z.object({}).strict(), z.null()]).optional()
+const noBody = z.preprocess(
+  (value) => value === undefined || value === null ? {} : value,
+  z.object({}).strict(),
+)
 const horizonQuery = z.object({
   horizon: z.coerce.number().int().refine((value) => [7, 30, 90, 120].includes(value)).optional(),
 }).strict()
+const scenarioName = z.enum(["expected", "conservative", "optimistic"])
 const forecastQuery = horizonQuery.extend({
-  scenario: z.enum(["expected", "conservative", "optimistic"]).optional(),
+  scenario: z.string().refine((value) => {
+    const scenarios = value.split(",").map((item) => item.trim())
+    return scenarios.every((scenario) => scenarioName.safeParse(scenario).success)
+      && new Set(scenarios).size === scenarios.length
+  }, "Expected a comma-separated list of unique scenarios").optional(),
 })
 
 function routeId(params: unknown) {
@@ -231,7 +239,10 @@ export function registerRecordRoutes(app: FastifyInstance): void {
       transactionPatch.parse(request.body),
     ),
   )
-  app.delete("/api/v1/transactions/:id", { schema: { params: idParams, body: noBody } }, async (request) =>
+  app.delete("/api/v1/transactions/:id", {
+    schema: { params: idParams, body: noBody },
+    config: { allowEmptyBody: true },
+  }, async (request) =>
     deleteTransaction(requireContext(request), routeId(request.params)),
   )
   app.post("/api/v1/transactions/import", {
@@ -270,11 +281,15 @@ export function registerRecordRoutes(app: FastifyInstance): void {
   app.patch("/api/v1/invoices/:id", { schema: { params: idParams, body: invoicePatch } }, async (request) =>
     patchInvoice(requireContext(request), routeId(request.params), invoicePatch.parse(request.body)),
   )
-  app.delete("/api/v1/invoices/:id", { schema: { params: idParams, body: noBody } }, async (request) =>
+  app.delete("/api/v1/invoices/:id", {
+    schema: { params: idParams, body: noBody },
+    config: { allowEmptyBody: true },
+  }, async (request) =>
     deleteInvoice(requireContext(request), routeId(request.params)),
   )
   app.post("/api/v1/invoices/:id/issue", {
     schema: { params: idParams, body: noBody },
+    config: { allowEmptyBody: true },
   }, async (request) =>
     issueBankTransferInvoice(requireContext(request), routeId(request.params)),
   )
@@ -285,7 +300,10 @@ export function registerRecordRoutes(app: FastifyInstance): void {
   app.patch("/api/v1/employees/:id", { schema: { params: idParams, body: employeePatch } }, async (request) =>
     patchEmployee(requireContext(request), routeId(request.params), employeePatch.parse(request.body)),
   )
-  app.delete("/api/v1/employees/:id", { schema: { params: idParams, body: noBody } }, async (request) =>
+  app.delete("/api/v1/employees/:id", {
+    schema: { params: idParams, body: noBody },
+    config: { allowEmptyBody: true },
+  }, async (request) =>
     deleteEmployee(requireContext(request), routeId(request.params)),
   )
 
@@ -304,6 +322,7 @@ export function registerRecordRoutes(app: FastifyInstance): void {
   )
   app.post("/api/v1/recurring-costs/:id/review", {
     schema: { params: idParams, body: noBody },
+    config: { allowEmptyBody: true },
   }, async (request) =>
     reviewRecurringCost(requireContext(request), routeId(request.params)),
   )
@@ -318,14 +337,20 @@ export function registerRecordRoutes(app: FastifyInstance): void {
   app.post("/api/v1/financing/offers", { schema: { body: offerCreate } }, async (request) =>
     createOffer(requireContext(request), offerCreate.parse(request.body)),
   )
-  app.delete("/api/v1/financing/offers/:id", { schema: { params: idParams, body: noBody } }, async (request) =>
+  app.delete("/api/v1/financing/offers/:id", {
+    schema: { params: idParams, body: noBody },
+    config: { allowEmptyBody: true },
+  }, async (request) =>
     deleteOffer(requireContext(request), routeId(request.params)),
   )
 
   app.post("/api/v1/scenarios", { schema: { body: scenarioCreate } }, async (request) =>
     createScenario(requireContext(request), scenarioCreate.parse(request.body)),
   )
-  app.delete("/api/v1/scenarios/:id", { schema: { params: idParams, body: noBody } }, async (request) =>
+  app.delete("/api/v1/scenarios/:id", {
+    schema: { params: idParams, body: noBody },
+    config: { allowEmptyBody: true },
+  }, async (request) =>
     deleteScenario(requireContext(request), routeId(request.params)),
   )
 
@@ -334,7 +359,10 @@ export function registerRecordRoutes(app: FastifyInstance): void {
     const state = await readComputedState(ctx)
     const query = forecastQuery.parse(request.query)
     const forecast = forecastAll(state, await currentDate(ctx), query.horizon ?? state.settings.defaultHorizon)
-    return query.scenario ? forecast[query.scenario] : forecast
+    if (!query.scenario) return forecast
+    const scenarios = query.scenario.split(",").map((scenario) => scenarioName.parse(scenario.trim()))
+    if (scenarios.length === 1) return forecast[scenarios[0]]
+    return Object.fromEntries(scenarios.map((scenario) => [scenario, forecast[scenario]]))
   })
   app.get("/api/v1/dashboard/summary", { schema: { querystring: horizonQuery } }, async (request) => {
     const ctx = requireContext(request)
@@ -357,7 +385,10 @@ export function registerRecordRoutes(app: FastifyInstance): void {
     return buildBriefing(state, await currentDate(ctx), query.horizon ?? state.settings.defaultHorizon)
   })
 
-  app.post("/api/v1/admin/reset-demo", { schema: { body: noBody } }, async (request) =>
+  app.post("/api/v1/admin/reset-demo", {
+    schema: { body: noBody },
+    config: { allowEmptyBody: true },
+  }, async (request) =>
     resetDemoWorkspace(requireContext(request)),
   )
 }

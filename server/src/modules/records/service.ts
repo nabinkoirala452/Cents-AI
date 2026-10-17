@@ -12,15 +12,15 @@ import type {
   SavedScenario,
   Transaction,
 } from "../../../../src/lib/types"
-import { findDuplicate, parseLooseDate } from "../../core"
+import { createSeed, findDuplicate, parseLooseDate } from "../../core"
 import { config } from "../../config"
 import { prisma } from "../../db"
+import { replaceDemoWorkspaceRecords } from "../../lib/demo-seed"
 import { HttpError } from "../../lib/errors"
 import { requireEdit, requireOwner, requireView } from "../../lib/permissions"
 import { loadState } from "../../lib/state"
 import type { RequestContext } from "../../plugins/auth"
 import { audit } from "../audit/service"
-import { payloadHash } from "../../lib/hash"
 
 type TransactionInput = Omit<Transaction, "id" | "status" | "source" | "invoiceId" | "reviewReason">
 type TransactionPatch = Partial<TransactionInput>
@@ -77,6 +77,25 @@ async function requireScopedEmployees(
   })
   if (employees.length !== new Set(employeeIds).size) {
     throw new HttpError(404, "employee_not_found", "One or more employees were not found in this workspace.", "Not Found")
+  }
+}
+
+async function rejectExecutingInvoiceApproval(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  invoiceId: string,
+) {
+  const submitted = await tx.approval.findFirst({
+    where: { workspaceId, refId: invoiceId, status: "Submitted" },
+    select: { id: true },
+  })
+  if (submitted) {
+    throw new HttpError(
+      409,
+      "approval_in_progress",
+      "This invoice has an approval that is currently executing.",
+      "Conflict",
+    )
   }
 }
 
@@ -752,6 +771,7 @@ export async function patchInvoice(ctx: RequestContext, invoiceId: string, patch
       where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: invoiceId } },
     })
     if (!invoice) notFound("Invoice")
+    await rejectExecutingInvoiceApproval(tx, ctx.workspaceId, invoiceId)
     const draftKeys = new Set(["clientId", "projectId", "kind", "issueDate", "dueDate", "lineItems", "channel", "expectedDelayOverride", "notes"])
     const restrictedKeys = Object.keys(patch).filter((key) => !["expectedDelayOverride", "notes"].includes(key))
     if (invoice.status === "Sent" && restrictedKeys.length > 0) {
@@ -789,7 +809,7 @@ export async function patchInvoice(ctx: RequestContext, invoiceId: string, patch
         where: {
           workspaceId: ctx.workspaceId,
           refId: invoiceId,
-          status: { in: ["Pending", "Submitted"] },
+          status: "Pending",
         },
         data: { status: "Stale", decidedBy: "System", decidedAt: new Date(), note: "Invoice draft changed" },
       })
@@ -811,11 +831,12 @@ export async function deleteInvoice(ctx: RequestContext, invoiceId: string) {
     if (invoice.status !== "Draft") {
       throw new HttpError(409, "invoice_not_draft", "Only Draft invoices can be deleted.", "Conflict")
     }
+    await rejectExecutingInvoiceApproval(tx, ctx.workspaceId, invoiceId)
     await tx.approval.updateMany({
       where: {
         workspaceId: ctx.workspaceId,
         refId: invoiceId,
-        status: { in: ["Pending", "Submitted"] },
+        status: "Pending",
       },
       data: { status: "Stale", decidedBy: "System", decidedAt: new Date(), note: "Invoice draft deleted" },
     })
@@ -1007,7 +1028,7 @@ export async function resetDemoWorkspace(ctx: RequestContext) {
   if (!config.allowDemoReset) {
     throw new HttpError(403, "demo_reset_disabled", "Demo reset is disabled on this server.", "Forbidden")
   }
-  const seed = (await import("../../../../src/lib/seed")).createSeed()
+  const seed = createSeed()
   await prisma.$transaction(async (tx) => {
     const workspace = await tx.workspace.findUniqueOrThrow({
       where: { id: ctx.workspaceId },
@@ -1018,19 +1039,6 @@ export async function resetDemoWorkspace(ctx: RequestContext) {
       include: { user: { select: { id: true, name: true } } },
     })
     const preparedUsers = new Map(memberships.map(({ user }) => [user.name, user.id]))
-    await tx.transaction.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.paymentEvent.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.invoice.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.project.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.client.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.employee.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.contractorBill.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.recurringCost.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.loan.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.loanOffer.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.savedScenario.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.approval.deleteMany({ where: { workspaceId: ctx.workspaceId } })
-    await tx.importJob.deleteMany({ where: { workspaceId: ctx.workspaceId } })
     await tx.workspaceSettings.update({
       where: { workspaceId: ctx.workspaceId },
       data: {
@@ -1058,112 +1066,14 @@ export async function resetDemoWorkspace(ctx: RequestContext) {
         seededOn: seed.seededOn,
       },
     })
-    await tx.client.createMany({
-      data: seed.clients.map(({ id: recordId, ...client }) => ({
-        workspaceId: ctx.workspaceId,
-        id: recordId,
-        ...client,
-        currency: workspace.currency,
-      })),
-    })
-    await tx.project.createMany({
-      data: seed.projects.map((project) => ({
-        workspaceId: ctx.workspaceId,
-        id: project.id,
-        name: project.name,
-        clientId: project.clientId,
-        billing: project.billing,
-        contractValue: project.contractValue,
-        budgetCost: project.budgetCost,
-        status: project.status,
-        timeEntries: json(project.timeEntries),
-        unassignedHours: project.unassignedHours,
-        retainer: project.retainer === undefined ? Prisma.DbNull : json(project.retainer),
-        plannedBillings: project.plannedBillings === undefined ? Prisma.DbNull : json(project.plannedBillings),
-      })),
-    })
-    await tx.invoice.createMany({
-      data: seed.invoices.map((invoice) => ({
-        workspaceId: ctx.workspaceId,
-        id: invoice.id,
-        clientId: invoice.clientId,
-        projectId: invoice.projectId,
-        kind: invoice.kind,
-        issueDate: invoice.issueDate,
-        dueDate: invoice.dueDate,
-        currency: workspace.currency,
-        lineItems: json(invoice.lineItems),
-        status: invoice.status,
-        channel: invoice.channel === "Bank transfer" ? "BankTransfer" : "PayPal",
-        paidDate: invoice.paidDate,
-        paypalInvoiceId: invoice.paypal?.invoiceId,
-        paypalStatus: invoice.paypal?.status,
-        paypalPayerUrl: invoice.paypal?.payerUrl,
-        paypalSentAt: invoice.paypal?.sentAt ? new Date(invoice.paypal.sentAt) : null,
-        paypalLastCheckedAt: invoice.paypal?.lastCheckedAt ? new Date(invoice.paypal.lastCheckedAt) : null,
-        reminders: json(invoice.reminders),
-        expectedDelayOverride: invoice.expectedDelayOverride,
-        notes: invoice.notes,
-      })),
-    })
-    await tx.employee.createMany({ data: seed.employees.map((employee) => ({ workspaceId: ctx.workspaceId, ...employee })) })
-    await tx.contractorBill.createMany({ data: seed.contractorBills.map((bill) => ({ workspaceId: ctx.workspaceId, ...bill })) })
-    await tx.recurringCost.createMany({
-      data: seed.recurring.map((cost) => ({
-        workspaceId: ctx.workspaceId,
-        id: cost.id,
-        vendor: cost.vendor,
-        category: cost.category,
-        kind: cost.kind === "Fixed cost" ? "FixedCost" : "Subscription",
-        amount: cost.amount,
-        previousAmount: cost.previousAmount,
-        cycle: cost.cycle,
-        nextDate: cost.nextDate,
-        startedOn: cost.startedOn,
-        status: cost.status,
-        reviewed: cost.reviewed ?? false,
-      })),
-    })
-    await tx.loan.createMany({ data: seed.loans.map((loan) => ({ workspaceId: ctx.workspaceId, ...loan })) })
-    await tx.loanOffer.createMany({ data: seed.offers.map((offer) => ({ workspaceId: ctx.workspaceId, ...offer })) })
-    await tx.approval.createMany({
-      data: seed.approvals.map((approval) => {
-        const preparedByUserId = preparedUsers.get(approval.preparedBy) ?? null
-        const payload = {
-          kind: approval.kind,
-          refId: approval.refId,
-          recipient: approval.recipient,
-          amount: approval.amount,
-          currency: workspace.currency,
-          draft: approval.draft,
-        }
-        return {
-          workspaceId: ctx.workspaceId,
-          id: approval.id,
-          kind: approval.kind,
-          title: approval.title,
-          recipient: approval.recipient,
-          amount: approval.amount,
-          currency: workspace.currency,
-          refId: approval.refId,
-          preparedBy: approval.preparedBy,
-          requestedAt: new Date(approval.requestedAt),
-          status: approval.status,
-          idempotencyKey: approval.idempotencyKey,
-          steps: json(approval.steps),
-          draft: approval.draft,
-          decidedBy: approval.decidedBy,
-          decidedAt: approval.decidedAt ? new Date(approval.decidedAt) : null,
-          note: approval.note,
-          result: approval.result,
-          payload: json(payload),
-          payloadHash: payloadHash(payload),
-          preparedByUserId,
-          preparedByAgent: preparedByUserId === null,
-          attempt: 1,
-        }
-      }),
-    })
+    await replaceDemoWorkspaceRecords(
+      tx,
+      ctx.workspaceId,
+      seed,
+      workspace.currency,
+      preparedUsers,
+      ctx.userId,
+    )
     await tx.auditEvent.create({
       data: {
         workspaceId: ctx.workspaceId,

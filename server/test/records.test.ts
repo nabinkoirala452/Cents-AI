@@ -444,6 +444,101 @@ describe("record routes", () => {
     })
     expect(deleteDraft.statusCode).toBe(200)
 
+    const executingDraft = await app.inject({
+      method: "POST",
+      url: "/api/v1/invoices",
+      headers: headers(ownerToken),
+      payload: {
+        clientId: client.json().id,
+        kind: "Project",
+        issueDate: today,
+        dueDate: today,
+        lineItems: [{ description: "Executing approval", quantity: 1, unitPrice: 100 }],
+      },
+    })
+    const submittedApprovalId = `approval-submitted-${suffix}`
+    await prisma.approval.create({
+      data: {
+        workspaceId,
+        id: submittedApprovalId,
+        kind: "paypal_send_invoice",
+        title: "Executing send",
+        recipient: "Invoice Client",
+        amount: 100,
+        currency: "USD",
+        refId: executingDraft.json().id,
+        preparedBy: "Records Owner",
+        requestedAt: new Date(),
+        status: "Submitted",
+        idempotencyKey: `invoice-submitted-${suffix}`,
+        steps: ["send"],
+        payload: {},
+        payloadHash: "test",
+      },
+    })
+    const blockedEdit = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/invoices/${executingDraft.json().id}`,
+      headers: headers(ownerToken),
+      payload: { notes: "Must not race with send" },
+    })
+    expect(blockedEdit.statusCode).toBe(409)
+    expect(blockedEdit.json()).toMatchObject({ code: "approval_in_progress" })
+    const blockedDelete = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/invoices/${executingDraft.json().id}`,
+      headers: headers(ownerToken),
+    })
+    expect(blockedDelete.statusCode).toBe(409)
+    expect(blockedDelete.json()).toMatchObject({ code: "approval_in_progress" })
+    expect(await prisma.approval.findUnique({
+      where: { workspaceId_id: { workspaceId, id: submittedApprovalId } },
+    })).toMatchObject({ status: "Submitted" })
+    expect(await prisma.invoice.findUnique({
+      where: { workspaceId_id: { workspaceId, id: executingDraft.json().id } },
+    })).not.toBeNull()
+
+    const pendingDeleteDraft = await app.inject({
+      method: "POST",
+      url: "/api/v1/invoices",
+      headers: headers(ownerToken),
+      payload: {
+        clientId: client.json().id,
+        kind: "Project",
+        issueDate: today,
+        dueDate: today,
+        lineItems: [{ description: "Pending delete", quantity: 1, unitPrice: 100 }],
+      },
+    })
+    const pendingDeleteApprovalId = `approval-pending-delete-${suffix}`
+    await prisma.approval.create({
+      data: {
+        workspaceId,
+        id: pendingDeleteApprovalId,
+        kind: "paypal_send_invoice",
+        title: "Pending send",
+        recipient: "Invoice Client",
+        amount: 100,
+        currency: "USD",
+        refId: pendingDeleteDraft.json().id,
+        preparedBy: "Records Owner",
+        requestedAt: new Date(),
+        status: "Pending",
+        idempotencyKey: `invoice-pending-delete-${suffix}`,
+        steps: ["send"],
+        payload: {},
+        payloadHash: "test",
+      },
+    })
+    expect((await app.inject({
+      method: "DELETE",
+      url: `/api/v1/invoices/${pendingDeleteDraft.json().id}`,
+      headers: headers(ownerToken),
+    })).statusCode).toBe(200)
+    expect(await prisma.approval.findUnique({
+      where: { workspaceId_id: { workspaceId, id: pendingDeleteApprovalId } },
+    })).toMatchObject({ status: "Stale", decidedBy: "System" })
+
     const invalidDates = await app.inject({
       method: "POST",
       url: "/api/v1/invoices",
@@ -514,6 +609,57 @@ describe("record routes", () => {
     })
     expect(issue.statusCode).toBe(200)
     expect(issue.json().status).toBe("Sent")
+
+    const emptyObjectDraft = await app.inject({
+      method: "POST",
+      url: "/api/v1/invoices",
+      headers: headers(ownerToken),
+      payload: {
+        clientId: client.json().id,
+        kind: "Retainer",
+        issueDate: today,
+        dueDate: today,
+        lineItems: [{ description: "No body validation", quantity: 1, unitPrice: 100 }],
+        channel: "Bank transfer",
+      },
+    })
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/v1/invoices/${emptyObjectDraft.json().id}/issue`,
+      headers: headers(ownerToken),
+      payload: {},
+    })).statusCode).toBe(200)
+    const emptyBodyDraft = await app.inject({
+      method: "POST",
+      url: "/api/v1/invoices",
+      headers: headers(ownerToken),
+      payload: {
+        clientId: client.json().id,
+        kind: "Retainer",
+        issueDate: today,
+        dueDate: today,
+        lineItems: [{ description: "Empty body", quantity: 1, unitPrice: 100 }],
+        channel: "Bank transfer",
+      },
+    })
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/v1/invoices/${emptyBodyDraft.json().id}/issue`,
+      headers: { ...headers(ownerToken), "content-type": "application/json" },
+      payload: "",
+    })).statusCode).toBe(200)
+    expect((await app.inject({
+      method: "DELETE",
+      url: `/api/v1/invoices/${executingDraft.json().id}`,
+      headers: headers(ownerToken),
+      payload: {},
+    })).statusCode).toBe(409)
+    expect((await app.inject({
+      method: "DELETE",
+      url: `/api/v1/invoices/${emptyObjectDraft.json().id}`,
+      headers: headers(ownerToken),
+      payload: {},
+    })).statusCode).toBe(409)
   })
 
   it("covers employees, bills, recurring reviews, loans, offers, scenarios, computed reads, and audit", async () => {
@@ -624,12 +770,34 @@ describe("record routes", () => {
 
     for (const url of [
       "/api/v1/cashflow/forecast?horizon=7&scenario=conservative",
+      "/api/v1/cashflow/forecast?horizon=7&scenario=expected,conservative",
       "/api/v1/dashboard/summary?horizon=30",
       "/api/v1/briefing?horizon=90",
     ]) {
       const response = await app.inject({ method: "GET", url, headers: headers(viewerToken) })
       expect(response.statusCode).toBe(200)
     }
+    const selectedForecast = await app.inject({
+      method: "GET",
+      url: "/api/v1/cashflow/forecast?horizon=7&scenario=expected,conservative",
+      headers: headers(viewerToken),
+    })
+    expect(Object.keys(selectedForecast.json()).sort()).toEqual(["conservative", "expected"])
+    const defaultForecast = await app.inject({
+      method: "GET",
+      url: "/api/v1/cashflow/forecast?horizon=7",
+      headers: headers(viewerToken),
+    })
+    expect(defaultForecast.json()).toMatchObject({
+      conservative: expect.any(Object),
+      expected: expect.any(Object),
+      optimistic: expect.any(Object),
+    })
+    expect((await app.inject({
+      method: "GET",
+      url: "/api/v1/cashflow/forecast?horizon=7&scenario=expected,bogus",
+      headers: headers(viewerToken),
+    })).statusCode).toBe(400)
     expect(await prisma.auditEvent.count({ where: { workspaceId } })).toBeGreaterThan(0)
   })
 })

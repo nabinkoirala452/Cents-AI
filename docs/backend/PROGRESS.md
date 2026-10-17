@@ -67,3 +67,11 @@ Each phase appends a section: date, what changed (files), commands run and resul
 - **Validation passed:** `cd server && npm run typecheck`; `cd server && npm test -- --reporter=dot` (4 files, 9 tests passed, including empty seeded audit history, no fake PayPal evidence in API/CSV, successful sign-in audit entries, failed-login hash logging, concurrent idempotency reservation, 500 retry, and validation rejection); root `npx tsc --noEmit -p .`; `cd server && npm run db:migrate` (new migration applied; final run already in sync); `cd server && npm run db:seed` (Demo workspace seeded).
 - Confirmed the configured demo workspace has no remaining PayPal/GET claims. It has one genuine earlier settings-update event, which was retained as real append-only evidence; the seed does not add audit rows.
 - `server/.env` was not overwritten. No deviations or open questions.
+
+## Phase 3 review fixes — 2026-10-17
+- Updated `GET /cashflow/forecast` to validate comma-separated scenario names, return the requested selection, reject invalid/duplicate names, and retain the all-scenario default.
+- Changed bodyless-route validation to accept an omitted body, a zero-byte JSON body, and `{}`. Added route tests for all three forms; the JSON pre-parser adjustment is restricted to explicitly marked bodyless routes.
+- Draft invoice PATCH/DELETE now reject with `approval_in_progress` when a related approval is Submitted; only Pending approvals are changed to Stale. Added tests for the Submitted conflict and Pending staleness paths.
+- Extracted workspace record replacement into `server/src/lib/demo-seed.ts`; both `prisma/seed.ts` and `resetDemoWorkspace()` now call that shared persistence routine. Reset remains Owner-only and gated by `ALLOW_DEMO_RESET`; it writes the “Demo data reset” audit event and does not delete audit rows.
+- **Validation passed:** `npm --prefix server run typecheck`; `npm --prefix server test` (5 files, 15 tests passed); root `npx tsc --noEmit -p .`; `git diff --check`.
+- Did not run `db:seed` or reset the shared demo workspace. `server/.env` was not modified. No schema changes, migrations, deviations, or open questions.
