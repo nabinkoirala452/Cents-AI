@@ -145,7 +145,7 @@ export type ApprovalKind =
   | "record_contractor_payment"
   | "cancel_subscription"
 
-export type ApprovalStatus = "Pending" | "Rejected" | "Submitted" | "Verified" | "Failed"
+export type ApprovalStatus = "Pending" | "Rejected" | "Submitted" | "Verified" | "Failed" | "Stale"
 
 export type Approval = {
   id: string

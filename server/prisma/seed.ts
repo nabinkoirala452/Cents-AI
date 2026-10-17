@@ -1,18 +1,15 @@
-import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import bcrypt from "bcryptjs"
 import { Prisma, type PrismaClient } from "@prisma/client"
 import { createSeed } from "../src/core"
 import { config } from "../src/config"
 import { prisma } from "../src/db"
+import { payloadHash } from "../src/lib/hash"
 
 export const DEMO_WORKSPACE_ID = "centsai-demo"
 
 const json = (value: unknown) => value as Prisma.InputJsonValue
 const date = (value: string) => new Date(value)
-const digest = (value: unknown) =>
-  createHash("sha256").update(JSON.stringify(value)).digest("hex")
-
 export async function seedDemoWorkspace(
   database: PrismaClient,
   password: string,
@@ -253,7 +250,7 @@ export async function seedDemoWorkspace(
           note: approval.note,
           result: approval.result,
           payload: json(payload),
-          payloadHash: digest(payload),
+          payloadHash: payloadHash(payload),
           preparedByUserId: preparedUser,
           preparedByAgent: preparedUser === null,
           attempt: 1,

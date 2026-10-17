@@ -1,11 +1,4 @@
-import type {
-  Approval,
-  AuditEvent,
-  Role,
-  SavedScenario,
-  State,
-  Transaction,
-} from "../../../src/lib/types"
+import type { Approval, AuditEvent, Role, SavedScenario, State, Transaction } from "../../../src/lib/types"
 import { STATE_VERSION } from "../../../src/lib/seed"
 import { prisma } from "../db"
 
@@ -37,14 +30,17 @@ export async function loadState(workspaceId: string, role: Role): Promise<State>
     prisma.membership.findMany({ where: { workspaceId }, include: { user: true } }),
     prisma.client.findMany({ where: { workspaceId } }),
     prisma.project.findMany({ where: { workspaceId } }),
-    prisma.invoice.findMany({ where: { workspaceId } }),
-    prisma.transaction.findMany({ where: { workspaceId } }),
+    prisma.invoice.findMany({ where: { workspaceId }, orderBy: { issueDate: "desc" } }),
+    prisma.transaction.findMany({
+      where: { workspaceId },
+      orderBy: [{ date: "desc" }, { id: "desc" }],
+    }),
     prisma.employee.findMany({ where: { workspaceId } }),
-    prisma.contractorBill.findMany({ where: { workspaceId } }),
-    prisma.recurringCost.findMany({ where: { workspaceId } }),
+    prisma.contractorBill.findMany({ where: { workspaceId }, orderBy: { dueDate: "asc" } }),
+    prisma.recurringCost.findMany({ where: { workspaceId }, orderBy: { nextDate: "asc" } }),
     prisma.loan.findMany({ where: { workspaceId } }),
     prisma.loanOffer.findMany({ where: { workspaceId } }),
-    prisma.approval.findMany({ where: { workspaceId, status: { not: "Stale" } } }),
+    prisma.approval.findMany({ where: { workspaceId }, orderBy: { requestedAt: "desc" } }),
     prisma.auditEvent.findMany({ where: { workspaceId }, orderBy: { at: "desc" } }),
     prisma.savedScenario.findMany({ where: { workspaceId }, orderBy: { createdAt: "asc" } }),
   ])
@@ -218,9 +214,7 @@ export async function loadState(workspaceId: string, role: Role): Promise<State>
       months: offer.months,
       fees: numberValue(offer.fees),
     })),
-    approvals: approvals.flatMap((approval) => {
-      if (approval.status === "Stale") return []
-      return [{
+    approvals: approvals.map((approval) => ({
         id: approval.id,
         kind: approval.kind,
         title: approval.title,
@@ -241,8 +235,7 @@ export async function loadState(workspaceId: string, role: Role): Promise<State>
           : { decidedAt: approval.decidedAt.toISOString() }),
         ...(approval.note === null ? {} : { note: approval.note }),
         ...(approval.result === null ? {} : { result: approval.result }),
-      } satisfies Approval]
-    }),
+      } satisfies Approval)),
     audit: audit.map((event) => {
       const isDemoRecord = demoAuditIds.has(event.id)
       return {

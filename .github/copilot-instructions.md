@@ -10,6 +10,7 @@ Read `AGENTS.md` for the frontend layout and `docs/backend/SPEC.md` for the back
 - **Every query is scoped by `workspaceId` from the authenticated membership** — never trust a workspace id from the request body.
 - **Every mutation writes an audit event.** The audit table is append-only.
 - **Secrets** live only in `server/.env` (git-ignored). Never put secrets in `VITE_*` variables, in source, in logs, or in audit details. Never log PayPal tokens.
+- **Database lock-down (Supabase):** any migration that creates a new table must also `ENABLE ROW LEVEL SECURITY` on it and revoke privileges from `anon`/`authenticated` (guarded with IF EXISTS), like `server/prisma/migrations/*_lock_down_schema`. Prisma is a dev dependency, so the deploy build must install dev dependencies before `prisma migrate deploy`.
 - **Validate every input with Zod.** Errors are `application/problem+json`.
 - **Demo mode must keep working**: when `VITE_API_URL` is not set the frontend behaves exactly as before (localStorage only).
 - Be honest in UI text: never claim an API call or verification that did not actually happen.

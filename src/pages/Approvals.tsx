@@ -15,11 +15,11 @@ const KIND_ICON: Record<ApprovalKind, LucideIcon> = {
   cancel_subscription: ReceiptText,
 }
 
-const STATUS_TONE: Record<Approval["status"], string> = { Pending: "amber", Submitted: "blue", Verified: "green", Rejected: "neutral", Failed: "red" }
+const STATUS_TONE: Record<Approval["status"], string> = { Pending: "amber", Submitted: "blue", Verified: "green", Rejected: "neutral", Failed: "red", Stale: "neutral" }
 
 const TABS = ["Pending", "In progress", "Completed"] as const
 type Tab = (typeof TABS)[number]
-const inTab = (a: Approval, tab: Tab) => (tab === "Pending" ? a.status === "Pending" : tab === "In progress" ? a.status === "Submitted" : ["Verified", "Rejected", "Failed"].includes(a.status))
+const inTab = (a: Approval, tab: Tab) => (tab === "Pending" ? a.status === "Pending" : tab === "In progress" ? a.status === "Submitted" : ["Verified", "Rejected", "Failed", "Stale"].includes(a.status))
 
 export default function ApprovalsPage() {
   const { state, update, log, actor, toast } = useStore()
@@ -28,7 +28,7 @@ export default function ApprovalsPage() {
   const [reviewId, setReviewId] = useState<string | null>(null)
   const [filter, setFilter] = useState("all")
   const list = state.approvals.filter((a) => inTab(a, tab))
-  const counts = { Pending: state.approvals.filter((a) => inTab(a, "Pending")).length, "In progress": state.approvals.filter((a) => inTab(a, "In progress")).length, Completed: 0 }
+  const counts = { Pending: state.approvals.filter((a) => inTab(a, "Pending")).length, "In progress": state.approvals.filter((a) => inTab(a, "In progress")).length, Completed: state.approvals.filter((a) => inTab(a, "Completed")).length }
   const audit = state.audit.filter((e) => filter === "all" || e.outcome === filter)
   const review = state.approvals.find((a) => a.id === reviewId)
 
@@ -88,6 +88,7 @@ export default function ApprovalsPage() {
                     <small>
                       {a.recipient} · {a.preparedBy === "CentsAI agent" ? <span className="agent-chip"><Bot size={11} /> CentsAI agent</span> : `by ${a.preparedBy}`} · {fmtStamp(a.requestedAt)}
                     </small>
+                    {a.status === "Stale" && <small>Records changed after this was requested — request again</small>}
                     {a.result && <small className="approval-result">{a.result}</small>}
                   </div>
                   <b>

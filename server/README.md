@@ -15,7 +15,8 @@
 
 2. Copy `.env.example` to `.env` and set `DATABASE_URL`, a random `JWT_SECRET`
    of at least 32 characters, and `SEED_DEMO_PASSWORD`. Keep `.env` private and
-   do not use frontend `VITE_*` variables for server secrets.
+   do not use frontend `VITE_*` variables for server secrets. Set `CORS_ORIGIN`
+   to `http://localhost:8443` for the local Vite server.
 3. Apply the schema and load the demo workspace:
 
    ```sh
@@ -53,3 +54,10 @@ events are append-only by database trigger, so existing audit rows are retained
 and matching seed event IDs are skipped on subsequent runs. The State adapter
 labels the original demo audit rows as sample history because their described
 actions were not performed by this backend.
+
+Demo data dates are set when the workspace is seeded. Re-run `npm run db:seed`
+on the demo day to refresh its relative dates. Phase 3 will add an Owner-only
+demo reset endpoint.
+
+The Vite development server uses `http://localhost:8443`; set `CORS_ORIGIN` to
+that origin when running the frontend locally.
