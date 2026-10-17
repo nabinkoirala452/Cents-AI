@@ -4,13 +4,33 @@ import { prisma } from "../../db"
 import { requireContext } from "../../plugins/auth"
 import { patchSettings, patchWorkspace, readWorkspaceState, replaceDismissedInsights } from "./service"
 
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isHttpWebsite(website: string): boolean {
+  if (website.length === 0) return true
+  try {
+    const url = new URL(website)
+    return url.protocol === "http:" || url.protocol === "https:"
+  } catch {
+    return false
+  }
+}
+
 const workspacePatch = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   agencyType: z.string().trim().min(1).max(100).optional(),
   teamSize: z.string().trim().min(1).max(100).optional(),
   location: z.string().trim().min(1).max(200).optional(),
-  website: z.string().trim().max(500).optional(),
-  timezone: z.string().trim().min(1).max(100).optional(),
+  website: z.string().trim().max(500).refine(isHttpWebsite, "Website must be empty or an HTTP(S) URL").optional(),
+  timezone: z.string().trim().min(1).max(100)
+    .refine(isValidTimeZone, "Timezone must be a valid IANA timezone").optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "At least one field is required")
 
 const settingsPatch = z.object({

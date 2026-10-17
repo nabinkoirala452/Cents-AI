@@ -52,11 +52,12 @@ role therefore needs permission to create and drop schemas. If setup is
 interrupted before teardown, remove the leftover schema whose name starts with
 `centsai_test_`.
 
-The seed is repeatable. It refreshes all mutable demo-workspace data. Audit
-events are append-only by database trigger, so existing audit rows are retained
-and matching seed event IDs are skipped on subsequent runs. The State adapter
-labels the original demo audit rows as sample history because their described
-actions were not performed by this backend.
+The seed is repeatable and refreshes mutable demo-workspace data. It does not
+insert sample audit rows; the audit log starts empty and is populated only by
+operations that actually occur. Audit events are append-only by database
+trigger, so real events are retained on subsequent seeds. The one-time
+`20261017180000_remove_fake_demo_audit` migration removed the former fake demo
+operation claims.
 
 Demo data dates are set when the workspace is seeded. Re-run `npm run db:seed`
 on the demo day to refresh its relative dates. Phase 3 will add an Owner-only
@@ -73,6 +74,8 @@ workspaces the user belongs to. Protected API requests send both
 `Authorization: Bearer <token>` and `X-Workspace-Id`. Workspace membership is
 resolved from the verified token; a caller cannot select a workspace without
 being a member. The login route is limited to 10 attempts per minute per IP.
+Successful sign-ins are audited in each workspace the user belongs to. Failed
+sign-in warnings log only a SHA-256 digest of the normalized email.
 
 `GET /api/v1/me` returns the signed-in profile and memberships.
 `GET /api/v1/workspace/state` returns the frontend State for the selected

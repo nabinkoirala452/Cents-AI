@@ -47,3 +47,13 @@ Each phase appends a section: date, what changed (files), commands run and resul
 - Updated `server/README.md` with authentication headers, role update shape, audit endpoints, error behavior, and idempotency behavior.
 - **Validation passed:** from `server/`, `npm run typecheck`; `npm test -- --reporter=dot` (4 test files, 9 tests passed; includes login success/failure, token and membership checks, role matrix, audit append-only update/delete rejection, CSV escaping, and idempotency replay/conflict). From the repository root, `npx tsc --noEmit -p .` passed.
 - No Prisma schema changes were needed, so migrations were not run. No deviations from the requested Phase 2 behavior; no open questions.
+
+## Phase 2 review fixes — 2026-10-17
+- Stopped seeding synthetic audit history; sample approvals remain. Removed the `loadState()` relabelling hack so audit records now reflect their stored event evidence.
+- Added and applied `20261017180000_remove_fake_demo_audit`, which temporarily disables the append-only trigger only to delete `AU-2` through `AU-9` for `centsai-demo`, then re-enables the trigger.
+- Changed idempotency to reserve a key with status `0` before route execution. Concurrent duplicate requests receive `idempotency_in_progress`; completed responses replay for 24 hours; responses with status >=500 remove the reservation so retry is possible.
+- Hardened login with a fixed dummy bcrypt hash for unknown emails, successful `Signed in` audit events in each member workspace, and failed-sign-in warnings containing only a SHA-256 hash of the normalized email.
+- Validated workspace timezone names as IANA zones and website values as empty or HTTP(S) URLs.
+- **Validation passed:** `cd server && npm run typecheck`; `cd server && npm test -- --reporter=dot` (4 files, 9 tests passed, including empty seeded audit history, no fake PayPal evidence in API/CSV, successful sign-in audit entries, failed-login hash logging, concurrent idempotency reservation, 500 retry, and validation rejection); root `npx tsc --noEmit -p .`; `cd server && npm run db:migrate` (new migration applied; final run already in sync); `cd server && npm run db:seed` (Demo workspace seeded).
+- Confirmed the configured demo workspace has no remaining PayPal/GET claims. It has one genuine earlier settings-update event, which was retained as real append-only evidence; the seed does not add audit rows.
+- `server/.env` was not overwritten. No deviations or open questions.

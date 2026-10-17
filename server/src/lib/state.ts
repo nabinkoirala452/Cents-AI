@@ -5,7 +5,6 @@ import { prisma } from "../db"
 const numberValue = (value: { toNumber(): number }) => value.toNumber()
 const jsonArray = <T>(value: unknown): T[] => value as T[]
 const jsonObject = <T extends object>(value: unknown): T => value as T
-const demoAuditIds = new Set(["AU-2", "AU-3", "AU-4", "AU-5", "AU-6", "AU-7", "AU-8", "AU-9"])
 
 export async function loadState(workspaceId: string, role: Role): Promise<State> {
   const [
@@ -234,20 +233,15 @@ export async function loadState(workspaceId: string, role: Role): Promise<State>
         ...(approval.note === null ? {} : { note: approval.note }),
         ...(approval.result === null ? {} : { result: approval.result }),
       } satisfies Approval)),
-    audit: audit.map((event) => {
-      const isDemoRecord = demoAuditIds.has(event.id)
-      return {
-        id: event.id,
-        at: event.at.toISOString(),
-        actor: isDemoRecord ? "Demo seed" : event.actor,
-        action: isDemoRecord ? `Sample · ${event.action}` : event.action,
-        detail: isDemoRecord
-          ? "Sample audit history only; no underlying operation was performed."
-          : event.detail,
-        ...(event.ref === null ? {} : { ref: event.ref }),
-        outcome: event.outcome,
-      } satisfies AuditEvent
-    }),
+    audit: audit.map((event) => ({
+      id: event.id,
+      at: event.at.toISOString(),
+      actor: event.actor,
+      action: event.action,
+      detail: event.detail,
+      ...(event.ref === null ? {} : { ref: event.ref }),
+      outcome: event.outcome,
+    } satisfies AuditEvent)),
     scenarios: scenarios.map((scenario) => ({
       id: scenario.id,
       name: scenario.name,

@@ -258,19 +258,6 @@ export async function seedDemoWorkspace(
         }
       }),
     })
-    await tx.auditEvent.createMany({
-      data: state.audit.map((event) => ({
-        workspaceId: DEMO_WORKSPACE_ID,
-        id: event.id,
-        at: date(event.at),
-        actor: event.actor,
-        action: event.action,
-        detail: event.detail,
-        ref: event.ref,
-        outcome: event.outcome,
-      })),
-      skipDuplicates: true,
-    })
   }, { maxWait: 30_000, timeout: 120_000 })
 }
 

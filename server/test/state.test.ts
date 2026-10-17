@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { cashBalance, createSeed, forecastAll, invoiceTotal, receivables, todayISO } from "../src/core"
 import { prisma } from "../src/db"
@@ -33,7 +34,6 @@ describe("loadState", () => {
       loans: actual.loans.length,
       offers: actual.offers.length,
       approvals: actual.approvals.length,
-      audit: actual.audit.length,
       scenarios: actual.scenarios.length,
     }).toEqual({
       clients: expected.clients.length,
@@ -46,9 +46,9 @@ describe("loadState", () => {
       loans: expected.loans.length,
       offers: expected.offers.length,
       approvals: expected.approvals.length,
-      audit: expected.audit.length,
       scenarios: expected.scenarios.length,
     })
+    expect(actual.audit).toEqual([])
     expect(cashBalance(actual, todayISO())).toBe(cashBalance(expected, todayISO()))
     expect(receivables(actual, todayISO()).outstanding)
       .toBe(receivables(expected, todayISO()).outstanding)
@@ -67,16 +67,25 @@ describe("loadState", () => {
     expect(actual.settings.currency).toBe("USD")
     expect(actual.clients.every((client) => client.currency === actual.settings.currency)).toBe(true)
     expect(actual.invoices.every((invoice) => invoice.currency === actual.settings.currency)).toBe(true)
-    expect(actual.audit.every((event) => event.action.startsWith("Sample · "))).toBe(true)
   })
 
   it("enforces append-only audit rows and one open approval per reference", async () => {
+    await prisma.auditEvent.create({
+      data: {
+        workspaceId: DEMO_WORKSPACE_ID,
+        id: "AU-append-only-test",
+        actor: "Test",
+        action: "Append-only test",
+        detail: "Test fixture",
+        outcome: "info",
+      },
+    })
     await expect(prisma.auditEvent.updateMany({
-      where: { workspaceId: DEMO_WORKSPACE_ID, id: "AU-9" },
+      where: { workspaceId: DEMO_WORKSPACE_ID, id: "AU-append-only-test" },
       data: { detail: "must not update" },
     })).rejects.toThrow()
     await expect(prisma.auditEvent.deleteMany({
-      where: { workspaceId: DEMO_WORKSPACE_ID, id: "AU-9" },
+      where: { workspaceId: DEMO_WORKSPACE_ID, id: "AU-append-only-test" },
     })).rejects.toThrow()
 
     await expect(prisma.approval.create({
@@ -177,6 +186,28 @@ describe("loadState", () => {
     vi.useRealTimers()
     const app = await buildApp()
     try {
+      const warnSpy = vi.spyOn(app.log, "warn")
+      let executions = 0
+      let signalHandlerStarted = () => {}
+      let releaseHandler = () => {}
+      const handlerStarted = new Promise<void>((resolve) => {
+        signalHandlerStarted = resolve
+      })
+      const handlerGate = new Promise<void>((resolve) => {
+        releaseHandler = resolve
+      })
+      app.post("/api/v1/test/idempotent", async () => {
+        executions += 1
+        signalHandlerStarted()
+        await handlerGate
+        return { execution: executions }
+      })
+      let failingExecutions = 0
+      app.post("/api/v1/test/retry-after-server-error", async (_request, reply) => {
+        failingExecutions += 1
+        if (failingExecutions === 1) return reply.code(500).send({ error: "temporary" })
+        return { execution: failingExecutions }
+      })
       const login = async (email: string, password = "test-only-password") =>
         app.inject({
           method: "POST",
@@ -210,6 +241,10 @@ describe("loadState", () => {
       expect(unknownUser.statusCode).toBe(401)
       expect(unknownUser.json()).toEqual(wrongPassword.json())
       expect(JSON.stringify(unknownUser.json())).not.toContain("missing@centsai.demo")
+      expect(warnSpy).toHaveBeenCalledWith({
+        emailHash: createHash("sha256").update("missing@centsai.demo").digest("hex"),
+      }, "Failed sign-in")
+      expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("missing@centsai.demo")
 
       expect((await app.inject({ method: "GET", url: "/api/v1/workspace/state" })).statusCode).toBe(401)
       expect((await app.inject({
@@ -242,6 +277,25 @@ describe("loadState", () => {
         })).statusCode).toBe(200)
       }
 
+      const signedInEvents = await prisma.auditEvent.findMany({
+        where: { workspaceId: DEMO_WORKSPACE_ID, action: "Signed in" },
+      })
+      expect(signedInEvents).toHaveLength(3)
+      const auditFeed = await app.inject({
+        method: "GET",
+        url: "/api/v1/audit-events",
+        headers: headers(owner.token),
+      })
+      const auditCsv = await app.inject({
+        method: "GET",
+        url: "/api/v1/audit-events/export.csv",
+        headers: headers(owner.token),
+      })
+      expect(auditFeed.body.toLowerCase()).not.toContain("via get")
+      expect(auditFeed.body.toLowerCase()).not.toContain("paypal")
+      expect(auditCsv.body.toLowerCase()).not.toContain("via get")
+      expect(auditCsv.body.toLowerCase()).not.toContain("paypal")
+
       const originalWorkspaceName = createSeed().settings.agencyName
       const viewerPatch = await app.inject({
         method: "PATCH",
@@ -251,6 +305,21 @@ describe("loadState", () => {
       })
       expect(viewerPatch.statusCode).toBe(403)
       expect(viewerPatch.json().code).toBe("forbidden_role")
+
+      const invalidTimezone = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/workspace",
+        headers: headers(finance.token),
+        payload: { timezone: "Not/A_Real_Zone" },
+      })
+      expect(invalidTimezone.statusCode).toBe(400)
+      const invalidWebsite = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/workspace",
+        headers: headers(finance.token),
+        payload: { website: "ftp://example.com" },
+      })
+      expect(invalidWebsite.statusCode).toBe(400)
 
       const managerPatch = await app.inject({
         method: "PATCH",
@@ -386,6 +455,51 @@ describe("loadState", () => {
         },
       })
       expect(restoreSettings.statusCode).toBe(200)
+
+      const concurrentHeaders = {
+        ...headers(owner.token),
+        "idempotency-key": "same-time-idempotency-test",
+      }
+      const firstConcurrentRequest = app.inject({
+        method: "POST",
+        url: "/api/v1/test/idempotent",
+        headers: concurrentHeaders,
+        payload: {},
+      })
+      await handlerStarted
+      const secondConcurrentResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/test/idempotent",
+        headers: concurrentHeaders,
+        payload: {},
+      })
+      releaseHandler()
+      const firstConcurrentResponse = await firstConcurrentRequest
+      expect(executions).toBe(1)
+      expect(firstConcurrentResponse.statusCode).toBe(200)
+      expect(secondConcurrentResponse.statusCode).toBe(409)
+      expect(secondConcurrentResponse.json().code)
+        .toBe("idempotency_in_progress")
+
+      const retryHeaders = {
+        ...headers(owner.token),
+        "idempotency-key": "retry-after-server-error-test",
+      }
+      expect((await app.inject({
+        method: "POST",
+        url: "/api/v1/test/retry-after-server-error",
+        headers: retryHeaders,
+        payload: {},
+      })).statusCode).toBe(500)
+      const retryResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/test/retry-after-server-error",
+        headers: retryHeaders,
+        payload: {},
+      })
+      expect(retryResponse.statusCode).toBe(200)
+      expect(retryResponse.json()).toEqual({ execution: 2 })
+      expect(failingExecutions).toBe(2)
     } finally {
       await app.close()
     }
