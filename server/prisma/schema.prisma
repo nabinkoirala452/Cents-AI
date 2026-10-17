@@ -1,0 +1,528 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  Owner
+  FinanceManager
+  Viewer
+}
+
+enum Currency {
+  INR
+  USD
+}
+
+enum Scenario {
+  expected
+  optimistic
+  conservative
+}
+
+enum ProjectBilling {
+  Fixed
+  Milestone
+  Retainer
+}
+
+enum ProjectStatus {
+  Active
+  Completed
+}
+
+enum InvoiceKind {
+  Milestone
+  Retainer
+  Project
+}
+
+enum InvoiceStatus {
+  Draft
+  Sent
+  Paid
+  Cancelled
+}
+
+enum InvoiceChannel {
+  PayPal
+  BankTransfer @map("Bank transfer")
+}
+
+enum PayPalStatus {
+  DRAFT
+  SENT
+  PAID
+  CANCELLED
+}
+
+enum PaymentSource {
+  PayPal
+  Manual
+}
+
+enum TransactionType {
+  Income
+  Expense
+}
+
+enum TransactionStatus {
+  Recorded
+  Verified
+  Review
+}
+
+enum TransactionSource {
+  Manual
+  CSVImport      @map("CSV import")
+  InvoicePayment @map("Invoice payment")
+  PayPal
+  Recurring
+}
+
+enum EmployeeStatus {
+  Active
+  Planned
+}
+
+enum ContractorBillStatus {
+  Scheduled
+  Pending
+  Paid
+}
+
+enum RecurringCategory {
+  Software
+  Rent
+  Tax
+  Utilities
+  Marketing
+}
+
+enum RecurringKind {
+  Subscription
+  FixedCost    @map("Fixed cost")
+}
+
+enum RecurringCycle {
+  Monthly
+  Annual
+}
+
+enum RecurringStatus {
+  Active
+  Review
+  Cancelled
+}
+
+enum ApprovalKind {
+  paypal_send_invoice
+  send_reminder
+  record_contractor_payment
+  cancel_subscription
+}
+
+enum ApprovalStatus {
+  Pending
+  Rejected
+  Submitted
+  Verified
+  Failed
+  Stale
+}
+
+enum AuditOutcome {
+  info
+  success
+  warning
+  error
+}
+
+model User {
+  id                String          @id @default(cuid())
+  email             String          @unique
+  name              String
+  passwordHash      String
+  memberships       Membership[]
+  preparedApprovals Approval[]      @relation("PreparedApprovals")
+  createdScenarios  SavedScenario[] @relation("ScenarioCreator")
+}
+
+model Workspace {
+  id              String             @id @default(cuid())
+  name            String
+  agencyType      String
+  teamSize        String
+  location        String
+  website         String
+  timezone        String             @default("Asia/Kolkata")
+  seededOn        String
+  settings        WorkspaceSettings?
+  memberships     Membership[]
+  clients         Client[]
+  projects        Project[]
+  invoices        Invoice[]
+  payments        PaymentEvent[]
+  transactions    Transaction[]
+  employees       Employee[]
+  contractorBills ContractorBill[]
+  recurringCosts  RecurringCost[]
+  loans           Loan[]
+  loanOffers      LoanOffer[]
+  scenarios       SavedScenario[]
+  approvals       Approval[]
+  auditEvents     AuditEvent[]
+  importJobs      ImportJob[]
+  idempotencyKeys IdempotencyKey[]
+}
+
+model Membership {
+  workspaceId String
+  userId      String
+  role        MembershipRole
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, userId])
+  @@unique([workspaceId, userId])
+}
+
+model WorkspaceSettings {
+  workspaceId          String    @id
+  usdRate              Decimal   @db.Decimal(14, 2)
+  safetyThreshold      Decimal   @db.Decimal(14, 2)
+  defaultHorizon       Int
+  planningScenario     Scenario
+  managerApprovalLimit Decimal   @db.Decimal(14, 2)
+  openingBalance       Decimal   @db.Decimal(14, 2)
+  openingDate          String
+  ownerName            String
+  ownerEmail           String
+  notifications        Json
+  readiness            Json
+  dismissedInsights    Json
+  workspace            Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model Client {
+  workspaceId  String
+  id           String
+  name         String
+  email        String
+  country      String
+  currency     Currency
+  avgDelayDays Int
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projects     Project[]
+  invoices     Invoice[]
+
+  @@id([workspaceId, id])
+}
+
+model Project {
+  workspaceId     String
+  id              String
+  name            String
+  clientId        String
+  billing         ProjectBilling
+  contractValue   Decimal        @db.Decimal(14, 2)
+  budgetCost      Decimal        @db.Decimal(14, 2)
+  status          ProjectStatus
+  timeEntries     Json
+  unassignedHours Float
+  retainer        Json?
+  plannedBillings Json?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  workspace       Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  client          Client         @relation(fields: [workspaceId, clientId], references: [workspaceId, id])
+
+  @@id([workspaceId, id])
+  @@index([workspaceId, clientId])
+}
+
+model Invoice {
+  workspaceId           String
+  id                    String
+  clientId              String
+  projectId             String?
+  kind                  InvoiceKind
+  issueDate             String
+  dueDate               String
+  currency              Currency
+  lineItems             Json
+  status                InvoiceStatus
+  channel               InvoiceChannel
+  paidDate              String?
+  paypalInvoiceId       String?        @unique
+  paypalStatus          PayPalStatus?
+  paypalPayerUrl        String?
+  paypalSentAt          DateTime?
+  paypalLastCheckedAt   DateTime?
+  reminders             Json
+  expectedDelayOverride Int?
+  notes                 String?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  workspace             Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  client                Client         @relation(fields: [workspaceId, clientId], references: [workspaceId, id])
+  payments              PaymentEvent[]
+
+  @@id([workspaceId, id])
+  @@index([workspaceId, clientId])
+}
+
+model PaymentEvent {
+  workspaceId  String
+  id           String
+  invoiceId    String
+  source       PaymentSource
+  externalId   String
+  status       String
+  gross        Decimal       @db.Decimal(14, 2)
+  fee          Decimal?      @db.Decimal(14, 2)
+  net          Decimal?      @db.Decimal(14, 2)
+  currency     Currency
+  fxRate       Decimal       @db.Decimal(14, 2)
+  amountINR    Decimal       @db.Decimal(14, 2)
+  occurredAt   DateTime
+  verifiedAt   DateTime?
+  raw          Json?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invoice      Invoice       @relation(fields: [workspaceId, invoiceId], references: [workspaceId, id])
+  transactions Transaction[]
+
+  @@id([workspaceId, id])
+  @@unique([workspaceId, source, externalId])
+}
+
+model Transaction {
+  workspaceId    String
+  id             String
+  date           String
+  description    String
+  party          String
+  category       String
+  projectId      String?
+  type           TransactionType
+  amount         Decimal           @db.Decimal(14, 2)
+  status         TransactionStatus
+  source         TransactionSource
+  invoiceId      String?
+  paymentEventId String?
+  reference      String?
+  notes          String?
+  reviewReason   String?
+  importJobId    String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  paymentEvent   PaymentEvent?     @relation(fields: [workspaceId, paymentEventId], references: [workspaceId, id])
+
+  @@id([workspaceId, id])
+  @@unique([workspaceId, paymentEventId])
+  @@index([workspaceId, date])
+}
+
+model Employee {
+  workspaceId   String
+  id            String
+  name          String
+  role          String
+  monthlySalary Decimal        @db.Decimal(14, 2)
+  payDay        Int
+  status        EmployeeStatus
+  startDate     String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, id])
+}
+
+model ContractorBill {
+  workspaceId String
+  id          String
+  vendor      String
+  projectId   String?
+  reference   String
+  amount      Decimal              @db.Decimal(14, 2)
+  dueDate     String
+  status      ContractorBillStatus
+  paidDate    String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  workspace   Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, id])
+}
+
+model RecurringCost {
+  workspaceId    String
+  id             String
+  vendor         String
+  category       RecurringCategory
+  kind           RecurringKind
+  amount         Decimal           @db.Decimal(14, 2)
+  previousAmount Decimal?          @db.Decimal(14, 2)
+  cycle          RecurringCycle
+  nextDate       String
+  startedOn      String
+  status         RecurringStatus
+  reviewed       Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, id])
+}
+
+model Loan {
+  workspaceId      String
+  id               String
+  name             String
+  lender           String
+  principal        Decimal   @db.Decimal(14, 2)
+  rate             Decimal   @db.Decimal(14, 2)
+  tenureMonths     Int
+  startDate        String
+  emiDay           Int
+  prepaymentFeePct Decimal?  @db.Decimal(14, 2)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, id])
+}
+
+model LoanOffer {
+  workspaceId String
+  id          String
+  name        String
+  principal   Decimal   @db.Decimal(14, 2)
+  rate        Decimal   @db.Decimal(14, 2)
+  months      Int
+  fees        Decimal   @db.Decimal(14, 2)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, id])
+}
+
+model SavedScenario {
+  workspaceId String
+  id          String
+  name        String
+  type        String
+  inputs      Json
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation("ScenarioCreator", fields: [createdById], references: [id])
+
+  @@id([workspaceId, id])
+}
+
+model Approval {
+  workspaceId      String
+  id               String
+  kind             ApprovalKind
+  title            String
+  recipient        String
+  amount           Decimal        @db.Decimal(14, 2)
+  currency         Currency
+  amountINR        Decimal        @db.Decimal(14, 2)
+  refId            String
+  preparedBy       String
+  requestedAt      DateTime
+  status           ApprovalStatus
+  idempotencyKey   String         @unique
+  steps            Json
+  draft            String?
+  decidedBy        String?
+  decidedAt        DateTime?
+  note             String?
+  result           String?
+  payload          Json
+  payloadHash      String
+  preparedByUserId String?
+  preparedByAgent  Boolean        @default(false)
+  attempt          Int            @default(1)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  workspace        Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  preparedByUser   User?          @relation("PreparedApprovals", fields: [preparedByUserId], references: [id])
+
+  @@id([workspaceId, id])
+}
+
+model AuditEvent {
+  workspaceId String
+  id          String
+  at          DateTime     @default(now())
+  actorUserId String?
+  actor       String
+  action      String
+  detail      String
+  ref         String?
+  outcome     AuditOutcome
+  requestId   String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, id])
+  @@index([workspaceId, at])
+}
+
+model WebhookEvent {
+  providerEventId   String    @id
+  eventType         String
+  resourceId        String
+  rawBody           String
+  headers           Json
+  signatureVerified Boolean
+  receivedAt        DateTime  @default(now())
+  processedAt       DateTime?
+  error             String?
+}
+
+model ImportJob {
+  workspaceId String
+  id          String
+  fileName    String
+  rowCount    Int
+  imported    Int
+  duplicates  Int
+  invalid     Int
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, id])
+}
+
+model IdempotencyKey {
+  workspaceId    String
+  key            String
+  userId         String
+  route          String
+  responseStatus Int
+  responseBody   Json
+  createdAt      DateTime  @default(now())
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, key])
+  @@index([createdAt])
+}

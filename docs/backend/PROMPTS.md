@@ -47,6 +47,28 @@ Report: (1) files created, (2) exact commands you ran and their final output lin
 
 ---
 
+## Phase 1 fixes — from review (do these before Phase 2)
+
+```
+Phase 1 review fixes. Read docs/backend/PROGRESS.md first. Do not overwrite server/.env.
+
+1. CRITICAL security — Supabase exposes every table in the public schema through its REST API to anyone with the public (publishable) key. I verified that User (including passwordHash) and Transaction rows are readable that way right now. Add a new Prisma migration (raw SQL) that, for every table in the current schema (use current_schema(), do not hard-code "public", so it also works in the test schema):
+   - ALTER TABLE … ENABLE ROW LEVEL SECURITY (no policies — the API connects as the table owner, which bypasses RLS)
+   - REVOKE ALL on all tables, sequences and functions in the schema FROM anon, authenticated (guard each role with IF EXISTS — plain local Postgres has no such roles)
+   - ALTER DEFAULT PRIVILEGES in the schema REVOKE ALL ON TABLES/SEQUENCES/FUNCTIONS FROM anon, authenticated (same guard), so future tables are also locked
+   Include _prisma_migrations. Add a test that, after migrations, every table in the test schema has relrowsecurity = true and (if the role exists) has_table_privilege('anon', <table>, 'SELECT') is false. Apply the migration to the real database with `npm run db:migrate`.
+2. `Approval.idempotencyKey` must be unique per workspace, not globally: replace @unique with @@unique([workspaceId, idempotencyKey]) (new migration).
+3. Stale approvals: do not hide them. Add "Stale" to ApprovalStatus in src/lib/types.ts, show Stale in the Approvals page "Completed" tab with a neutral badge and the text "Records changed after this was requested — request again", and remove the Stale filter from loadState().
+4. Canonical payload hash: create server/src/lib/hash.ts exporting canonicalJson (recursively sorted object keys) and payloadHash(value) = sha256 hex of canonicalJson. Use it in the seed instead of JSON.stringify. Phase 4 must reuse this same function.
+5. Deterministic ordering in loadState(): transactions by date desc then id desc; invoices by issueDate desc; approvals by requestedAt desc; contractor bills by dueDate; recurring costs by nextDate. Keep audit as at desc.
+6. Remove `updatedAt` from AuditEvent (an append-only table has no updates).
+7. The Vite dev server runs on port 8443 (vite.config.ts), not 5173: change CORS_ORIGIN in server/.env.example and server/README.md to http://localhost:8443.
+8. README: note that demo data dates are fixed at seed time, so re-run `npm run db:seed` on demo day (Phase 3 adds an Owner-only reset endpoint). Record the Prisma 6 `npm audit` finding in PROGRESS.md as accepted for now (dev CLI dependency), to be revisited after the hackathon.
+9. Run typecheck, all tests and the frontend `npx tsc --noEmit -p .` from the repo root, then update docs/backend/PROGRESS.md and give me the Report.
+```
+
+---
+
 ## Phase 2 — Auth, roles, workspace scoping, audit, state endpoint
 
 ```
