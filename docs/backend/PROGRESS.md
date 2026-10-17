@@ -106,3 +106,10 @@ Each phase appends a section: date, what changed (files), commands run and resul
   payer_url: https://www.sandbox.paypal.com/invoice/p/#A2DVTKQSL99U6MQS
   ```
 - No `db:seed` or demo reset was run, and `server/.env` was not modified. The standalone validation orchestrator timed out during its full-test step; the direct full backend test command completed successfully. No open questions remain.
+
+## Phase 4 round-2 fixes — 2026-10-18
+- PayPal approval search recovery now fetches every search result with an ID before validating invoice total, currency, and recipient. Create-failure recovery follows the same GET-first rule. The fake gateway returns only the search-summary fields, so send-failure recovery exercises this path.
+- PayPal reconciliation now sets `Paid` and `paidDate` only when the invoice first becomes Paid, deriving its paid date from the latest stored PayPal payment's ledger transaction. Repeat syncs preserve the original date and write `Status checked`; `Payment verified` is emitted only for newly recorded payments or a newly Paid invoice.
+- Added regression assertions for partial search-result recovery, repeat-sync `paidDate` preservation, and audit-action counts.
+- **Validation passed:** `npm --prefix server run typecheck`; `npm --prefix server test -- test/money-path.test.ts` (1 file, 11 tests passed); `npm --prefix server test` (7 files, 31 tests passed); root `npx tsc --noEmit -p .`.
+- No `db:seed` or demo reset was run, and `server/.env` was not modified. No schema migration or open questions.

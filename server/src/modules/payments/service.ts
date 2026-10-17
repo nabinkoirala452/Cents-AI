@@ -150,15 +150,25 @@ async function reconcilePayPalStatus(
     const storedTotal = Math.round(Number(storedPayments._sum.gross ?? 0) * 100) / 100
     const fullyPaid = storedTotal >= invoiceTotal(current)
     const paidUnverified = external.status === "PAID" && !fullyPaid
-    const date = dateInTimeZone(checkedAt, workspace.timezone)
+    let paidDate: string | undefined
+    if (fullyPaid && current.status !== "Paid") {
+      const latestPayment = await tx.paymentEvent.findFirst({
+        where: { workspaceId, invoiceId: current.id, source: "PayPal" },
+        orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }],
+        select: { transactions: { select: { date: true } } },
+      })
+      paidDate = latestPayment?.transactions[0]?.date
+      if (!paidDate) throw new Error(`Verified PayPal payment for invoice ${current.id} has no ledger transaction date`)
+    }
+    const paymentVerified = insertedPayments > 0 || paidDate !== undefined
     await tx.invoice.update({
       where: { workspaceId_id: { workspaceId, id: current.id } },
       data: {
         paypalStatus: databasePayPalStatus(external.status),
         paypalLastCheckedAt: checkedAt,
-        ...(fullyPaid ? { status: "Paid", paidDate: date } : {}),
+        ...(paidDate ? { status: "Paid", paidDate } : {}),
         ...(cancelled ? { status: "Cancelled" } : {}),
-        ...(paidUnverified ? { status: "Sent", paidDate: null } : {}),
+        ...(paidUnverified && current.status !== "Paid" ? { status: "Sent", paidDate: null } : {}),
       },
     })
     if (fullyPaid) await withdrawPendingReminders(tx, workspaceId, current.id, "invoice was paid")
@@ -177,12 +187,12 @@ async function reconcilePayPalStatus(
         id: `AU-${randomUUID()}`,
         actorUserId,
         actor,
-        action: fullyPaid ? "Payment verified" : "Status checked",
+        action: paymentVerified ? "Payment verified" : "Status checked",
         detail: paidUnverified
           ? "PayPal reports PAID but payment details could not be verified"
           : `${current.id} PayPal status ${external.status}; ${insertedPayments} new payment(s)`,
         ref: current.id,
-        outcome: paidUnverified ? "warning" : fullyPaid ? "success" : "info",
+        outcome: paidUnverified ? "warning" : paymentVerified ? "success" : "info",
         requestId,
       },
     })

@@ -323,6 +323,14 @@ describe("approval and payment money path", () => {
     expect(gateway.calls.filter((call) =>
       call.method === "searchInvoiceByNumber" && call.invoiceNumber === persistedNumber,
     )).toHaveLength(2)
+    const recoverySearches = gateway.calls.filter((call) =>
+      call.method === "searchInvoiceByNumber" && call.invoiceNumber === persistedNumber,
+    )
+    const recoveredSearchIndex = gateway.calls.indexOf(recoverySearches[recoverySearches.length - 1])
+    expect(gateway.calls[recoveredSearchIndex + 1]).toMatchObject({
+      method: "getInvoice",
+      id: persisted?.paypalInvoiceId,
+    })
   })
 
   it("retries an aged Submitted PayPal approval exactly once", async () => {
@@ -446,13 +454,16 @@ describe("approval and payment money path", () => {
     })
 
     await gateway.sendInvoice(paidPayPalInvoice.id)
-    gateway.markPaid(paidPayPalInvoice.id)
+    gateway.markPaid(paidPayPalInvoice.id, undefined, "2026-10-14")
     await prisma.invoice.update({
       where: { workspaceId_id: { workspaceId, id: paidInvoice.id } },
       data: { status: "Sent", paypalInvoiceId: paidPayPalInvoice.id, paypalStatus: "SENT" },
     })
     const syncUrl = `/api/v1/invoices/${paidInvoice.id}/paypal/sync`
     expect((await app.inject({ method: "POST", url: syncUrl, headers: headers(viewerToken) })).statusCode).toBe(200)
+    expect(await prisma.invoice.findUnique({
+      where: { workspaceId_id: { workspaceId, id: paidInvoice.id } },
+    })).toMatchObject({ status: "Paid", paidDate: "2026-10-14" })
     expect((await app.inject({ method: "POST", url: syncUrl, headers: headers(viewerToken) })).statusCode).toBe(200)
     expect(await prisma.paymentEvent.count({
       where: { workspaceId, invoiceId: paidInvoice.id, source: "PayPal" },
@@ -462,7 +473,13 @@ describe("approval and payment money path", () => {
     })).toBe(1)
     expect(await prisma.invoice.findUnique({
       where: { workspaceId_id: { workspaceId, id: paidInvoice.id } },
-    })).toMatchObject({ status: "Paid", paypalStatus: "PAID" })
+    })).toMatchObject({ status: "Paid", paypalStatus: "PAID", paidDate: "2026-10-14" })
+    expect(await prisma.auditEvent.count({
+      where: { workspaceId, ref: paidInvoice.id, action: "Payment verified" },
+    })).toBe(1)
+    expect(await prisma.auditEvent.count({
+      where: { workspaceId, ref: paidInvoice.id, action: "Status checked" },
+    })).toBe(1)
 
     const pendingInvoice = await createInvoice(800)
     const pendingPayPalInvoice = await gateway.createDraftInvoice({

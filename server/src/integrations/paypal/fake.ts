@@ -26,7 +26,7 @@ export class FakePayPalGateway implements PayPalGateway {
     this.webhookSignatureValid = valid
   }
 
-  markPaid(paypalInvoiceId: string, amount?: number): void {
+  markPaid(paypalInvoiceId: string, amount?: number, paymentDate = new Date().toISOString()): void {
     const invoice = this.invoices.get(paypalInvoiceId)
     if (!invoice) throw new Error(`Fake PayPal invoice ${paypalInvoiceId} does not exist`)
     const input = this.invoiceInputs.get(paypalInvoiceId)
@@ -39,7 +39,7 @@ export class FakePayPalGateway implements PayPalGateway {
     payments.transactions.push({
       payment_id: `PAY-${randomUUID()}`,
       type: "PAYPAL",
-      payment_date: new Date().toISOString(),
+      payment_date: paymentDate,
       amount: { currency_code: input.currency, value: paid.toFixed(2) },
     })
     invoice.status = paid >= total ? "PAID" : "PARTIALLY_PAID"
@@ -116,7 +116,14 @@ export class FakePayPalGateway implements PayPalGateway {
     this.record("searchInvoiceByNumber", { invoiceNumber })
     this.maybeFail("searchInvoiceByNumber")
     const invoice = [...this.invoices.values()].find((item) => item.number === invoiceNumber)
-    return invoice ? structuredClone(invoice) : null
+    return invoice
+      ? {
+          id: invoice.id,
+          number: invoice.number,
+          status: invoice.status,
+          payments: [],
+        }
+      : null
   }
 
   async verifyWebhookSignature(_rawBody: string, _headers: PayPalWebhookHeaders): Promise<boolean> {

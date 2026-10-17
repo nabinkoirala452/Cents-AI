@@ -575,6 +575,9 @@ async function executeApproval(ctx: RequestContext, prepared: PreparedExecution)
     if (!invoice.paypalInvoiceNumber) throw new Error("PayPal invoice number was not persisted")
     const gateway = getPayPalGateway()
     let paypalInvoice = await gateway.searchInvoiceByNumber(invoice.paypalInvoiceNumber)
+    if (paypalInvoice?.id) {
+      paypalInvoice = await gateway.getInvoice(paypalInvoice.id)
+    }
     if (paypalInvoice && !matchesPayPalInvoice(paypalInvoice, invoice, snapshot.recipientEmail)) {
       throw new PayPalError("PayPal invoice number already used by a different invoice")
     }
@@ -590,10 +593,10 @@ async function executeApproval(ctx: RequestContext, prepared: PreparedExecution)
       } catch (createError) {
         const recovered = await gateway.searchInvoiceByNumber(invoice.paypalInvoiceNumber)
         if (!recovered) throw createError
-        if (!matchesPayPalInvoice(recovered, invoice, snapshot.recipientEmail)) {
+        paypalInvoice = recovered.id ? await gateway.getInvoice(recovered.id) : recovered
+        if (!matchesPayPalInvoice(paypalInvoice, invoice, snapshot.recipientEmail)) {
           throw new PayPalError("PayPal invoice number already used by a different invoice")
         }
-        paypalInvoice = recovered
       }
     }
     if (
