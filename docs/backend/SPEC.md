@@ -1,6 +1,7 @@
 # CentsAI Backend — Build Spec (non-AI phase)
 
 This is the authoritative spec for the backend. It condenses the "CentsAI Backend Blueprint" for the current phase.
+**Currency (decided 2026-10-17):** each workspace has ONE currency, default **USD**. All amounts (ledger, invoices, payroll, approvals, thresholds) are in that currency — there is no FX conversion. The demo agency is a small US-based agency billing in USD, so every invoice can be collected through PayPal.
 **Out of scope for now:** LLM / GenAI (copilot model, AI reminder drafting, AI briefing narrative). The existing rule-based copilot (`src/lib/copilot.ts`) and template reminders (`src/lib/drafts.ts`) keep running in the browser.
 
 ---
@@ -72,14 +73,14 @@ Moments (`createdAt`, audit `at`) are `DateTime` (UTC).
 | Table | Fields (in addition to `workspaceId`, `id`, `createdAt`, `updatedAt`) | Notes |
 |---|---|---|
 | `User` | `id` (cuid, global PK), `email` unique, `name`, `passwordHash` | not workspace-scoped |
-| `Workspace` | `id` (cuid, global PK), `name`, `agencyType`, `teamSize`, `location`, `website`, `timezone` (default `Asia/Kolkata`), `seededOn` | |
+| `Workspace` | `id` (cuid, global PK), `name`, `agencyType`, `teamSize`, `location`, `website`, `currency` (default `USD`), `timezone` (default `America/Chicago`), `seededOn` | |
 | `Membership` | `userId`, `workspaceId`, `role` enum `Owner \| FinanceManager \| Viewer` | `@@unique([workspaceId, userId])` |
-| `WorkspaceSettings` | PK `workspaceId`; `usdRate`, `safetyThreshold`, `defaultHorizon`, `planningScenario`, `managerApprovalLimit`, `openingBalance`, `openingDate`, `ownerName`, `ownerEmail`, `notifications Json`, `readiness Json`, `dismissedInsights Json` | 1:1 |
-| `Client` | `name`, `email`, `country`, `currency` (`INR`/`USD`), `avgDelayDays` | |
+| `WorkspaceSettings` | PK `workspaceId`; `safetyThreshold`, `defaultHorizon`, `planningScenario`, `managerApprovalLimit`, `openingBalance`, `openingDate`, `ownerName`, `ownerEmail`, `notifications Json`, `readiness Json`, `dismissedInsights Json` | 1:1 |
+| `Client` | `name`, `email`, `country`, `avgDelayDays` (currency = workspace currency) | |
 | `Project` | `name`, `clientId`, `billing`, `contractValue`, `budgetCost`, `status`, `timeEntries Json`, `unassignedHours`, `retainer Json?`, `plannedBillings Json?` | Json validated with Zod on write |
 | `Invoice` | `clientId`, `projectId?`, `kind`, `issueDate`, `dueDate`, `currency`, `lineItems Json`, `status` (`Draft/Sent/Paid/Cancelled`), `channel`, `paidDate?`, `paypalInvoiceId?` (unique), `paypalStatus?`, `paypalPayerUrl?`, `paypalSentAt?`, `paypalLastCheckedAt?`, `reminders Json`, `expectedDelayOverride?`, `notes?` | `dueDate >= issueDate` |
-| `PaymentEvent` | `invoiceId`, `source` (`PayPal/Manual`), `externalId` (PayPal capture/transaction id or bank UTR), `status`, `gross`, `fee?`, `net?`, `currency`, `fxRate`, `amountINR`, `occurredAt`, `verifiedAt?`, `raw Json?` | `@@unique([workspaceId, source, externalId])` — prevents double recording |
-| `Transaction` | `date`, `description`, `party`, `category`, `projectId?`, `type` (`Income/Expense`), `amount` (INR), `status` (`Recorded/Verified/Review`), `source`, `invoiceId?`, `paymentEventId?` (unique), `reference?`, `notes?`, `reviewReason?`, `importJobId?` | |
+| `PaymentEvent` | `invoiceId`, `source` (`PayPal/Manual`), `externalId` (PayPal capture/transaction id or bank/ACH reference), `status`, `gross`, `fee?`, `net?`, `currency`, `occurredAt`, `verifiedAt?`, `raw Json?` | `@@unique([workspaceId, source, externalId])` — prevents double recording |
+| `Transaction` | `date`, `description`, `party`, `category`, `projectId?`, `type` (`Income/Expense`), `amount` (workspace currency), `status` (`Recorded/Verified/Review`), `source`, `invoiceId?`, `paymentEventId?` (unique), `reference?`, `notes?`, `reviewReason?`, `importJobId?` | |
 | `Employee` | `name`, `role`, `monthlySalary`, `payDay` (1–28), `status`, `startDate` | |
 | `ContractorBill` | `vendor`, `projectId?`, `reference`, `amount`, `dueDate`, `status`, `paidDate?` | |
 | `RecurringCost` | `vendor`, `category`, `kind`, `amount`, `previousAmount?`, `cycle`, `nextDate`, `startedOn`, `status`, `reviewed` | |
@@ -94,7 +95,7 @@ Moments (`createdAt`, audit `at`) are `DateTime` (UTC).
 
 ### 4.1 Financial invariants (enforce in services + DB)
 1. A PayPal payment creates at most one `PaymentEvent` (unique `source+externalId`) and at most one `Transaction` (unique `paymentEventId`).
-2. An invoice becomes `Paid` only from (a) a PayPal `GET` that returns `PAID`, or (b) a manual payment with a bank reference. Manual = transaction status `Recorded`; PayPal-verified = `Verified`.
+2. An invoice becomes `Paid` only from (a) a PayPal `GET` that returns `PAID`, or (b) a manual payment with a bank reference. Manual (bank/ACH reference) = transaction status `Recorded`; PayPal-verified = `Verified`.
 3. `Verified` transactions are immutable except `category`, `projectId`, `notes`. They cannot be deleted. Invoice-linked transactions cannot be deleted.
 4. Forecast / simulated values are **never** written to `Transaction`.
 5. One open approval per `(kind, refId)`. An approval executes only if `payloadHash` still equals the hash recomputed from current records; otherwise it becomes `Stale`.
@@ -119,7 +120,7 @@ frontend `State` type** from `src/lib/types.ts` (numbers not Decimals, ISO strin
 - Permission helpers (server-side, mirror `permissions()` in `store.tsx`):
   - `view`: any member
   - `prepare` / `edit`: `Owner` or `FinanceManager`
-  - `approve(amountINR)`: `Owner` always; `FinanceManager` only if `amountINR <= managerApprovalLimit`; `Viewer` never
+  - `approve(amount)`: `Owner` always; `FinanceManager` only if `amount <= managerApprovalLimit`; `Viewer` never
   - Owner-only: changing `managerApprovalLimit`, team roles, `/admin/*`
 - Seed three demo users for the seeded workspace (one per role). Passwords come from `SEED_DEMO_PASSWORD` in `.env` (never hard-coded in source; document them in README as demo credentials).
 - In hosted mode the frontend **hides the "acting as" role switchers** (Approvals tier cards become read-only, Settings "Acting as (demo)" hidden). Role comes from the JWT membership.
@@ -127,7 +128,7 @@ frontend `State` type** from `src/lib/types.ts` (numbers not Decimals, ISO strin
 ## 7. API (all under `/api/v1`)
 
 Conventions: JSON; Zod-validated bodies/queries; errors as `application/problem+json` `{ type, title, status, code, detail, fields? }`;
-amounts in request/response bodies are numbers (INR or invoice currency) — the DB stores Decimal; mutations accept an
+amounts in request/response bodies are numbers in the workspace currency — the DB stores Decimal; mutations accept an
 `Idempotency-Key` header; every mutation writes an `AuditEvent`.
 
 Permission legend: **V** any member · **P** Owner/FinanceManager · **O** Owner · **Lim** approve rule above.
@@ -147,8 +148,8 @@ Permission legend: **V** any member · **P** Owner/FinanceManager · **O** Owner
 | `POST /invoices` | create **Draft** (server assigns next `INV-####`, currency from client) | P |
 | `PATCH /invoices/:id` | Draft: any field; Sent: only `expectedDelayOverride`, `notes`. Editing a draft marks its open approvals `Stale` | P |
 | `DELETE /invoices/:id` | Draft only | P |
-| `POST /invoices/:id/issue` | mark INR invoice sent (bank transfer) | P |
-| `POST /invoices/:id/payments` | manual bank receipt `{date, reference}` (reference required) → PaymentEvent(Manual) + Transaction(Recorded) + invoice Paid, in one DB transaction | P |
+| `POST /invoices/:id/issue` | mark an invoice sent outside PayPal (channel `Bank transfer`, e.g. ACH/wire) | P |
+| `POST /invoices/:id/payments` | manual bank receipt `{date, reference}` (bank/ACH reference required) → PaymentEvent(Manual) + Transaction(Recorded) + invoice Paid, in one DB transaction | P |
 | `POST /invoices/:id/paypal/sync` | "Verify payment status": PayPal GET + reconcile (§8.4) | V |
 | `POST /employees` · `PATCH /employees/:id` · `DELETE /employees/:id` | payroll planning | P |
 | `POST /contractor-bills` · `PATCH /contractor-bills/:id` | payables | P |
@@ -175,7 +176,7 @@ Approval kinds (same as frontend): `paypal_send_invoice`, `send_reminder`, `reco
 ### 8.1 Approval state machine
 `Pending → (approve) → Submitted → Verified` · `Pending → Rejected` · `Submitted → Failed` · `Pending → Stale` (records changed).
 On approve, inside a DB transaction: `SELECT … FOR UPDATE` the approval row → must be `Pending` → check role/limit against
-`amountINR` → recompute `payloadHash` from current records; mismatch → `Stale` (409) → set `Submitted`, `decidedBy`, `decidedAt`.
+`amount` → recompute `payloadHash` from current records; mismatch → `Stale` (409) → set `Submitted`, `decidedBy`, `decidedAt`.
 Then run the executor **outside** the DB transaction; write the result in a second transaction. Two concurrent approves → exactly one executes.
 
 `payloadHash = sha256(canonicalJSON({ kind, refId, recipientEmail, amount, currency, lineItems, dueDate, draft }))`.
@@ -193,15 +194,15 @@ Then run the executor **outside** the DB transaction; write the result in a seco
 - Refuse to start if `PAYPAL_ENV=sandbox` but base URL is not the sandbox URL (and vice versa).
 - OAuth2 client credentials `POST /v1/oauth2/token`, cache the token until ~60s before `expires_in`.
 - Endpoints: `POST /v2/invoicing/invoices`, `POST /v2/invoicing/invoices/{id}/send`, `GET /v2/invoicing/invoices/{id}`, `POST /v2/invoicing/invoices/{id}/remind`, `POST /v2/invoicing/search-invoices`, `POST /v1/notifications/verify-webhook-signature`.
-- Create payload: `detail { invoice_number: <INV id>, currency_code: "USD", invoice_date, payment_term { due_date }, note }`, `primary_recipients [{ billing_info { email_address, name { full_name: client.name } } }]`, `items [{ name, quantity: "1", unit_amount { currency_code, value: "650.00" } }]`.
+- Create payload: `detail { invoice_number: <INV id>, currency_code: <workspace currency>, invoice_date, payment_term { due_date }, note }`, `primary_recipients [{ billing_info { email_address, name { full_name: client.name } } }]`, `items [{ name, quantity: "1", unit_amount { currency_code, value: "650.00" } }]`.
 - Retries: 3× with jittered backoff on 429/5xx/network for GET and remind; for create, retry only after the search-recovery check. Never retry 4xx.
 - Audit every call: method, path, HTTP status, `paypal-debug-id`. **Never** log tokens or secrets.
 - Define an interface `PayPalGateway`; real implementation in `invoicing.ts`, in-memory fake in `fake.ts` used by tests and when `PAYPAL_MODE=fake`.
-- Only USD invoices go through PayPal (INR = bank transfer) — keep `paypalEligibility()` logic.
+- Every invoice defaults to channel `PayPal`. An invoice may be marked `Bank transfer` instead (client pays by ACH/wire; recorded manually with a reference). Eligibility for PayPal: channel PayPal, client email present, at least one line item, currency supported by PayPal.
 
 ### 8.4 Reconciliation (`payments` module) — used by sync, webhook, and poll
 1. `GET` the invoice from PayPal (never trust a webhook body).
-2. `PAID` / `PARTIALLY_PAID`: for each payment in the response not yet stored → `PaymentEvent(PayPal, externalId = payment transaction id)` + `Transaction(Income, Verified, source PayPal, amount = gross × usdRate)`; invoice `Paid` when fully paid. All in one DB transaction. Then withdraw pending reminders (§4.1 #7).
+2. `PAID` / `PARTIALLY_PAID`: for each payment in the response not yet stored → `PaymentEvent(PayPal, externalId = payment transaction id)` + `Transaction(Income, Verified, source PayPal, amount = gross)`; invoice `Paid` when fully paid. All in one DB transaction. Then withdraw pending reminders (§4.1 #7).
 3. `PAYMENT_PENDING`: record nothing; forecast keeps it uncertain.
 4. `CANCELLED`: invoice `Cancelled`, withdraw reminders.
 5. Update `paypalStatus`, `paypalLastCheckedAt`; audit `Payment verified` / `Status checked`.
@@ -228,7 +229,7 @@ Return 2xx only after the event is stored. Local dev needs a tunnel; the "Verify
 - **State adapter**: seed DB → `loadState()` equals `createSeed()` on the compared fields.
 - **Permissions matrix**: Viewer/FinanceManager/Owner × every mutating route → expected 2xx/403.
 - **Workspace isolation**: user of workspace A gets 404 for workspace B ids.
-- **Approvals**: limit check (FinanceManager blocked above ₹50,000), stale hash, concurrent double approve → one execution.
+- **Approvals**: limit check (FinanceManager blocked above the $6,000 limit), stale hash, concurrent double approve → one execution.
 - **PayPal (fake gateway)**: send happy path; crash between create and send → search recovery, no duplicate; sync PAID → one payment event + one transaction; repeat sync → no duplicate; PAYMENT_PENDING → nothing recorded; bad webhook signature → not processed; duplicate webhook → no-op.
 - **Transactions**: duplicate → Review; verified immutable; future date rejected; import counts.
 

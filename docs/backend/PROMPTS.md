@@ -69,6 +69,38 @@ Phase 1 review fixes. Read docs/backend/PROGRESS.md first. Do not overwrite serv
 
 ---
 
+## Currency switch — INR → USD (do this before Phase 2)
+
+```
+Currency switch: move the whole app from Indian rupees to US dollars. Read docs/backend/SPEC.md (top note "Currency" and §4) first — it is already updated. Read docs/backend/PROGRESS.md. Do not overwrite server/.env.
+
+Decision: each workspace has ONE currency, default "USD". Every amount (ledger, invoices, payroll, bills, loans, offers, thresholds, approvals) is in that currency. No FX conversion anywhere. The demo agency becomes a small US-based agency. Keep the code currency-aware (formatting takes a currency code) so another single currency could be configured later, but USD is the only one used in the demo.
+
+Frontend (src/):
+1. types.ts: add `currency: Currency` to Settings (replace `reportingCurrency: "INR"`); remove `usdRate`; Approval: remove `amountINR` (keep `amount` + `currency`). Invoice/Client keep a `currency` field but it always equals the workspace currency. Keep `channel: "PayPal" | "Bank transfer"` — default PayPal; "Bank transfer" means the client pays by ACH/wire and payment is recorded manually with a reference.
+2. format.ts: `money(value, currency = "USD")` using Intl.NumberFormat("en-US") with 0 decimals for whole amounts and 2 decimals when cents exist; replace `compactINR` with `compactMoney` ($85k, $1.2M); remove lakh formatting.
+3. finance.ts: delete `toINR`; replace `invoiceINR` with `invoiceTotal` everywhere; no conversion in receivables, forecast, projectStats, briefing. Rename anything "INR" in names/comments. The calculations must otherwise stay identical.
+4. paypal.ts eligibility: channel must be PayPal, client email present, ≥1 line item, currency supported by PayPal (USD at least). No "INR invoices use bank transfer" logic.
+5. seed.ts — convert the demo agency to USD while keeping the SAME financial story (conservative 90-day forecast dips just below the safety threshold around the second payroll; the expected scenario stays above it):
+   - Every amount that is in INR today → round(INR / 8) (salaries and recurring costs to the nearest $50; other amounts to the nearest $10).
+   - Every amount that is in USD today (USD invoices like $650, $360, $1,150, $900, $720, $1,080, contractValue USD parts) → round(USD × 10.5) to the nearest $10 (keeps their value relative to everything else).
+   - Opening cash target: $81,250 (was ₹6,50,000). Safety threshold $12,500. Finance Manager approval limit $6,000. Hire example $5,600/month.
+   - All clients use USD and channel PayPal, except make Spring & Co. channel "Bank transfer" (pays by ACH) so the manual-payment path still exists.
+   - Location "Austin, TX, USA"; clients: Acme Technologies (US), PixelCraft Studio (UK), Northstar Consulting (US), Spring & Co. (US), Horizon Labs (US), Greyspace (Canada). Rename "GST & TDS deposit" → "Payroll tax deposit". Keep people names. References like "NEFT-…"/"UTR" → "ACH-…".
+   - Bump STATE_VERSION so browsers re-seed.
+6. Every page, the landing page, copilot.ts (parseAmount: "$45k", "$5,600", "45000"; suggested questions in $), drafts.ts, csv.ts sample (amounts ÷ 8), Auth register (currency select USD only), Settings (remove the "USD → INR rate" field; show "Reporting currency: USD" read-only), CashFlow assumptions modal (remove the rate field), Invoices (remove "≈ ₹…" conversions; currency/channel field shows "USD · PayPal" or "USD · Bank transfer"; Create invoice lets the user pick the channel, default PayPal), Approvals (remove "≈ ₹" lines). Remove every "₹", "INR", "lakh", "en-IN", "UTR", "NEFT" from user-visible text.
+7. After the change, open the app in demo mode (Settings → Reset demo data) and confirm: Dashboard shows $81,250 cash and the "Potential cash shortfall" alert in the conservative scenario; 2 overdue invoices; copilot hire question answers "Not comfortably in the conservative scenario". If the story breaks, adjust seed amounts slightly (not the engine) until it holds, and note what you changed.
+
+Server (server/):
+8. Prisma: add `Workspace.currency Currency @default(USD)`; remove `WorkspaceSettings.usdRate`; remove `Approval.amountINR`; remove `PaymentEvent.fxRate` and `PaymentEvent.amountINR`; Client.currency may stay but must equal the workspace currency. New migration (keep RLS: any new table must enable RLS). Re-seed with `npm run db:seed`.
+9. state.ts and seed.ts updated to the new types; `settings.currency` from Workspace.currency.
+10. Update tests (state parity with createSeed(), hash, RLS) and add one test asserting no amount in loadState() is converted (e.g. invoice totals equal line-item sums, transactions equal seed values).
+
+Checks: root `npx tsc --noEmit -p .`, `npm run build`, `npm --prefix server run typecheck`, `npm --prefix server test`, `npm run db:migrate`, `npm run db:seed`. Search the repo (excluding node_modules, docs/, hacakathon_fintech_problem_statment.md) for "₹", "INR", "usdRate", "amountINR", "toINR", "invoiceINR", "lakh", "en-IN" — must return nothing. Update docs/backend/PROGRESS.md and give me the Report (include the new headline demo numbers: cash, conservative 90-day low and its date, expected 90-day end).
+```
+
+---
+
 ## Phase 2 — Auth, roles, workspace scoping, audit, state endpoint
 
 ```
@@ -78,7 +110,7 @@ Task: authentication, authorization and the audit service.
 
 1. `POST /api/v1/auth/login` (bcrypt compare, generic 401, rate limit 10/min/IP) returning `{ token, user, workspaces }`; JWT HS256 signed with JWT_SECRET via jose, 8h expiry, claims: sub (userId).
 2. `plugins/auth.ts`: for every route except health, login and webhooks — verify the bearer JWT, read `X-Workspace-Id`, load the membership (404 if the user is not a member), set `req.ctx = { userId, userName, workspaceId, role, requestId }`.
-3. `lib/permissions.ts`: `canView`, `canPrepare`, `canEdit`, `canApprove(role, amountINR, managerApprovalLimit)`, `isOwner` — same rules as `permissions()` in src/lib/store.tsx. Services must call these (not only routes). Throw a typed 403 error (problem+json code `forbidden_role`).
+3. `lib/permissions.ts`: `canView`, `canPrepare`, `canEdit`, `canApprove(role, amount, managerApprovalLimit)`, `isOwner` — same rules as `permissions()` in src/lib/store.tsx. Services must call these (not only routes). Throw a typed 403 error (problem+json code `forbidden_role`).
 4. `modules/audit/service.ts`: `audit(ctx, { actor?, action, detail, ref?, outcome })` — insert only. `GET /api/v1/audit-events` (limit + cursor, filter by ref) and `GET /api/v1/audit-events/export.csv` with formula-injection guard.
 5. `plugins/idempotency.ts`: honour an `Idempotency-Key` header on POST/PATCH/DELETE — replay within 24h returns the stored status + body; same key with a different route → 409.
 6. `GET /api/v1/me`, `GET /api/v1/workspace/state` (calls loadState with the caller's role), `PATCH /api/v1/workspace`, `PATCH /api/v1/settings` (Owner-only fields: managerApprovalLimit and team roles), `PUT /api/v1/settings/dismissed-insights`. All mutations write audit events.
@@ -100,7 +132,7 @@ Task: all record routes and the read-only computed endpoints from SPEC §7, EXCE
 1. Transactions: POST/PATCH/DELETE with the rules in SPEC §4.1 #3 and the duplicate check reusing `findDuplicate` from core.ts (duplicate → status Review with reviewReason). Date must be <= today in the workspace timezone. Server generates ids with the TXN- prefix.
 2. `POST /transactions/import`: body `{ fileName, rows }`; re-validate every row server-side (date parse via `parseLooseDate`, amount > 0, type, required fields), skip invalid, skip or flag duplicates (query param `skipDuplicates=true|false`), create an ImportJob, return `{ imported, duplicates, invalid, issues: [{row, reason}] }`. Max 5,000 rows.
 3. Clients, projects (+ `POST /projects/:id/time-entries` that moves hours from unassignedHours like the frontend does), employees, contractor bills, recurring costs (+ review), loans, financing offers, saved scenarios — create/update/delete exactly as listed in SPEC §7, with Zod schemas mirroring src/lib/types.ts.
-4. Invoices: POST (Draft, next INV-#### number per workspace, currency from client, channel PayPal for USD / Bank transfer for INR, validate line items and dueDate >= issueDate), PATCH (Draft: any field; Sent: only expectedDelayOverride and notes; editing a Draft marks its open approvals Stale), DELETE (Draft only), `POST /invoices/:id/issue` (INR only — USD invoices must go through PayPal approval).
+4. Invoices: POST (Draft, next INV-#### number per workspace, currency = workspace currency, channel PayPal by default (Bank transfer optional), validate line items and dueDate >= issueDate), PATCH (Draft: any field; Sent: only expectedDelayOverride and notes; editing a Draft marks its open approvals Stale), DELETE (Draft only), `POST /invoices/:id/issue` (only for channel Bank transfer — PayPal invoices must go through PayPal approval).
 5. Computed (read-only, via loadState + core.ts): `GET /cashflow/forecast`, `GET /dashboard/summary`, `GET /briefing`. No duplicated math.
 6. `POST /admin/reset-demo` (Owner only, only when ALLOW_DEMO_RESET=true) reusing the seed logic for the caller's workspace.
 7. Every mutation: permission check in the service, audit event, Zod validation, problem+json errors.
@@ -119,11 +151,11 @@ Read docs/backend/SPEC.md §4.1 and §8 very carefully. Continue from docs/backe
 
 Task:
 1. `integrations/paypal`: interface `PayPalGateway` { createDraftInvoice, sendInvoice, getInvoice, remindInvoice, searchInvoiceByNumber, verifyWebhookSignature }. Real implementation (fetch, OAuth2 client-credentials with cached token, retries per SPEC §8.3, audit of method/path/status/debug_id, never log tokens). In-memory fake (`fake.ts`) with test helpers like `markPaid(paypalId, amount)` and failure injection. Choose by PAYPAL_MODE (sandbox|fake).
-2. Approvals module (SPEC §8.1, §8.2): `GET /approvals`, `POST /approvals` (server builds recipient/amount/currency/steps/draft from DB records; computes payloadHash; idempotencyKey kind-refId-attempt; one open approval per kind+refId), `POST /approvals/:id/approve` (row lock, status check, canApprove with amountINR and managerApprovalLimit, payloadHash recheck → Stale, then executor outside the DB transaction, result in a second transaction), `POST /approvals/:id/reject`, `POST /approvals/:id/confirm-transfer`. Executors for all four kinds exactly as SPEC §8.2. `paypal_send_invoice` must search-before-create and persist paypalInvoiceId before calling send. Only USD invoices with a client email are eligible.
+2. Approvals module (SPEC §8.1, §8.2): `GET /approvals`, `POST /approvals` (server builds recipient/amount/currency/steps/draft from DB records; computes payloadHash; idempotencyKey kind-refId-attempt; one open approval per kind+refId), `POST /approvals/:id/approve` (row lock, status check, canApprove with amount and managerApprovalLimit, payloadHash recheck → Stale, then executor outside the DB transaction, result in a second transaction), `POST /approvals/:id/reject`, `POST /approvals/:id/confirm-transfer`. Executors for all four kinds exactly as SPEC §8.2. `paypal_send_invoice` must search-before-create and persist paypalInvoiceId before calling send. Only PayPal-channel invoices with a client email are eligible.
 3. Payments module (SPEC §8.4): `reconcileInvoice(workspaceId, invoiceId)` used by `POST /invoices/:id/paypal/sync` and the webhook; `POST /invoices/:id/payments` for manual bank receipts (reference required). One DB transaction for payment event + transaction + invoice status. Withdraw pending reminders on Paid/Cancelled.
 4. Webhook (SPEC §8.5): raw-body route, store WebhookEvent first (replay = no-op), verify signature, reconcile only if verified, always 2xx after storing.
 5. A manual script `server/scripts/paypal-smoke.ts` (npm run paypal:smoke) that, using real sandbox credentials from .env: gets a token, creates + sends one USD test invoice with invoice_number "SMOKE-<timestamp>", GETs it and prints status + payer URL. It must refuse to run unless PAYPAL_ENV=sandbox.
-6. Tests with the fake gateway: send happy path → invoice Sent + approval Verified; FinanceManager blocked above ₹50,000; Viewer blocked; stale payloadHash; two concurrent approves → exactly one PayPal create; crash between create and send → retry recovers via search, no duplicate; sync PAID → exactly one PaymentEvent and one Transaction (Verified), repeat sync → no duplicates; PAYMENT_PENDING → nothing recorded; manual payment requires reference; webhook bad signature → stored, not processed; duplicate webhook id → no-op; paid invoice withdraws pending reminder approvals.
+6. Tests with the fake gateway: send happy path → invoice Sent + approval Verified; FinanceManager blocked above $6,000; Viewer blocked; stale payloadHash; two concurrent approves → exactly one PayPal create; crash between create and send → retry recovers via search, no duplicate; sync PAID → exactly one PaymentEvent and one Transaction (Verified), repeat sync → no duplicates; PAYMENT_PENDING → nothing recorded; manual payment requires reference; webhook bad signature → stored, not processed; duplicate webhook id → no-op; paid invoice withdraws pending reminder approvals.
 7. Update docs/backend/PROGRESS.md, including the exact smoke-script output (with secrets removed).
 
 Report: files changed, commands + output, tests, smoke-script result, deviations, open questions.
@@ -145,7 +177,7 @@ Task:
 6. Invoice drawer in hosted mode: remove "Simulate client payment"; show the PayPal payer link with the hint "Pay it in the PayPal sandbox with your sandbox personal account, then click Verify payment status".
 7. Honest labels: in hosted mode, Settings → Integrations shows the real PayPal mode, and nothing claims an API call that did not happen.
 8. Show a loading state while the workspace loads and a readable error + Retry button if the API is unreachable.
-9. Verify: `npx tsc --noEmit -p .` at the root passes; `npm run build` passes; run the app in demo mode and hosted mode and walk through: login as owner → create USD invoice → request PayPal send → approve → pay on the sandbox payer page → Verify payment status → invoice Paid + ledger entry + audit trail. Repeat approve as finance@ for an amount above ₹50,000 → blocked.
+9. Verify: `npx tsc --noEmit -p .` at the root passes; `npm run build` passes; run the app in demo mode and hosted mode and walk through: login as owner → create USD invoice → request PayPal send → approve → pay on the sandbox payer page → Verify payment status → invoice Paid + ledger entry + audit trail. Repeat approve as finance@ for an amount above $6,000 → blocked.
 10. Update docs/backend/PROGRESS.md.
 
 Report: files changed, what you tested manually in both modes, anything not wired yet, deviations, open questions.
