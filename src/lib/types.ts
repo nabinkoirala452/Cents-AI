@@ -1,4 +1,4 @@
-export type Currency = "INR" | "USD"
+export type Currency = "USD" | "EUR" | "GBP" | "CAD"
 export type Role = "Owner" | "Finance Manager" | "Viewer"
 export type Scenario = "expected" | "optimistic" | "conservative"
 
@@ -58,7 +58,7 @@ export type Transaction = {
   category: string
   projectId?: string
   type: TxnType
-  /** Always stored in the reporting currency (INR). */
+  /** Always stored in the workspace currency. */
   amount: number
   status: TxnStatus
   source: "Manual" | "CSV import" | "Invoice payment" | "PayPal" | "Recurring"
@@ -135,7 +135,7 @@ export type Project = {
   timeEntries: { employeeId: string; hours: number }[]
   unassignedHours: number
   retainer?: { amount: number; dayOfMonth: number }
-  /** Milestones the owner plans to invoice (INR, by planned invoice date). */
+  /** Milestones the owner plans to invoice, by planned invoice date. */
   plannedBillings?: { date: string; amount: number; label: string }[]
 }
 
@@ -154,7 +154,6 @@ export type Approval = {
   recipient: string
   amount: number
   currency: Currency
-  amountINR: number
   refId: string
   preparedBy: string
   requestedAt: string
@@ -188,8 +187,7 @@ export type Settings = {
   website: string
   ownerName: string
   ownerEmail: string
-  reportingCurrency: "INR"
-  usdRate: number
+  currency: Currency
   safetyThreshold: number
   defaultHorizon: 7 | 30 | 90
   planningScenario: Scenario

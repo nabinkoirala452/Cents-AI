@@ -14,8 +14,10 @@ enum MembershipRole {
 }
 
 enum Currency {
-  INR
   USD
+  EUR
+  GBP
+  CAD
 }
 
 enum Scenario {
@@ -155,11 +157,12 @@ model User {
 model Workspace {
   id              String             @id @default(cuid())
   name            String
+  currency        Currency           @default(USD)
   agencyType      String
   teamSize        String
   location        String
   website         String
-  timezone        String             @default("Asia/Kolkata")
+  timezone        String             @default("America/Chicago")
   seededOn        String
   settings        WorkspaceSettings?
   memberships     Membership[]
@@ -193,7 +196,6 @@ model Membership {
 
 model WorkspaceSettings {
   workspaceId          String    @id
-  usdRate              Decimal   @db.Decimal(14, 2)
   safetyThreshold      Decimal   @db.Decimal(14, 2)
   defaultHorizon       Int
   planningScenario     Scenario
@@ -289,8 +291,6 @@ model PaymentEvent {
   fee          Decimal?      @db.Decimal(14, 2)
   net          Decimal?      @db.Decimal(14, 2)
   currency     Currency
-  fxRate       Decimal       @db.Decimal(14, 2)
-  amountINR    Decimal       @db.Decimal(14, 2)
   occurredAt   DateTime
   verifiedAt   DateTime?
   raw          Json?
@@ -441,7 +441,6 @@ model Approval {
   recipient        String
   amount           Decimal        @db.Decimal(14, 2)
   currency         Currency
-  amountINR        Decimal        @db.Decimal(14, 2)
   refId            String
   preparedBy       String
   requestedAt      DateTime

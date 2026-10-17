@@ -21,7 +21,7 @@ export default function FinancingPage() {
   const { state, today, update, log, actor, toast, can } = useStore()
   const s = state.settings
   const [purpose, setPurpose] = useState("Hiring or expansion")
-  const [spend, setSpend] = useState(300000)
+  const [spend, setSpend] = useState(37500)
   const [needDate, setNeedDate] = useState(addDays(today, 30))
   const [reserve, setReserve] = useState(s.safetyThreshold)
   const [scenario, setScenario] = useState<Scenario>("conservative")
@@ -114,13 +114,13 @@ export default function FinancingPage() {
                 <option>Refinancing existing debt</option>
               </Select>
             </Field>
-            <Field label="Planned spend (₹)">
+            <Field label={`Planned spend (${state.settings.currency})`}>
               <Input type="number" min="0" step="10000" value={spend} onChange={(e) => setSpend(Number(e.target.value))} />
             </Field>
             <Field label="Needed by">
               <Input type="date" min={addDays(today, 1)} max={addDays(today, horizon)} value={needDate} onChange={(e) => setNeedDate(e.target.value)} />
             </Field>
-            <Field label="Minimum cash reserve (₹)">
+            <Field label={`Minimum cash reserve (${state.settings.currency})`}>
               <Input type="number" min="0" step="10000" value={reserve} onChange={(e) => setReserve(Number(e.target.value))} />
             </Field>
             <Field label="Forecast scenario">
@@ -324,7 +324,7 @@ export default function FinancingPage() {
 }
 
 function OfferForm({ close, onAdd }: { close: () => void; onAdd: (o: LoanOffer) => void }) {
-  const { toast } = useStore()
+  const { state, toast } = useStore()
   const [d, setD] = useState({ name: "", principal: "", rate: "", months: "24", fees: "0" })
   return (
     <FormModal
@@ -343,7 +343,7 @@ function OfferForm({ close, onAdd }: { close: () => void; onAdd: (o: LoanOffer) 
         <Field label="Offer name" full>
           <Input value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder="e.g. Bank term loan" required />
         </Field>
-        <Field label="Principal (₹)">
+        <Field label={`Principal (${state.settings.currency})`}>
           <Input type="number" min="1" value={d.principal} onChange={(e) => setD({ ...d, principal: e.target.value })} required />
         </Field>
         <Field label="Annual rate (%)">
@@ -352,7 +352,7 @@ function OfferForm({ close, onAdd }: { close: () => void; onAdd: (o: LoanOffer) 
         <Field label="Tenure (months)">
           <Input type="number" min="1" value={d.months} onChange={(e) => setD({ ...d, months: e.target.value })} />
         </Field>
-        <Field label="Fees (₹)" hint="Processing, documentation and other known fees">
+        <Field label={`Fees (${state.settings.currency})`} hint="Processing, documentation and other known fees">
           <Input type="number" min="0" value={d.fees} onChange={(e) => setD({ ...d, fees: e.target.value })} />
         </Field>
       </div>

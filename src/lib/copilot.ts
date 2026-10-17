@@ -48,7 +48,7 @@ export type CopilotAnswer = {
 }
 
 export const SUGGESTED_QUESTIONS = [
-  "Can we afford to hire another developer at ₹45,000 per month?",
+  "Can we afford to hire another developer at $5,600 per month?",
   "Can we cover payroll if Acme pays 30 days late?",
   "Which clients have overdue invoices?",
   "How much money came in and went out this month?",
@@ -62,13 +62,13 @@ const WORD_NUMBERS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, thre
 
 const parseAmount = (q: string): number | undefined => {
   const m =
-    q.match(/(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)\s*(k|l|lakh|lac)?/i) ??
-    q.match(/\b([\d,]+(?:\.\d+)?)\s*(k|l|lakh|lac)\b/i) ??
-    q.match(/\b(\d{1,3}(?:,\d{2,3})+|\d{4,})\b/)
+    q.match(/\$\s*([\d,]+(?:\.\d+)?)\s*(k)?/i) ??
+    q.match(/\b([\d,]+(?:\.\d+)?)\s*(k)\b/i) ??
+    q.match(/\b(\d{1,3}(?:,\d{3})+|\d{4,})\b/)
   if (!m) return undefined
   const value = Number(m[1].replace(/,/g, ""))
   const unit = (m[2] ?? "").toLowerCase()
-  return unit === "k" ? value * 1000 : unit ? value * 100000 : value
+  return unit === "k" ? value * 1000 : value
 }
 
 const parseDays = (q: string, fallback: number) => {
@@ -106,7 +106,7 @@ export function answerQuestion(state: State, today: string, question: string): C
   }
 
   const hire = (): CopilotAnswer => {
-    const salary = parseAmount(question) ?? 45000
+    const salary = parseAmount(question) ?? 5600
     const start = dayInMonth(today, 1, 1)
     const payroll = nextPayroll(state, today)
     const payDay = payroll ? parseISO(payroll.date).getDate() : 28
@@ -137,7 +137,7 @@ export function answerQuestion(state: State, today: string, question: string): C
     const rec = receivables(state, today)
     if (!consOk && rec.overdue.length) a.actions.push({ label: "Prepare reminders for overdue invoices", kind: "draft-reminders" })
     a.actions.push({ label: "Open in Scenario Simulator", kind: "navigate", to: `simulator?type=hire&salary=${salary}` }, { label: "View forecast", kind: "navigate", to: "cash-flow?scenario=conservative&horizon=90" })
-    a.assumptions.push(`Salary starts ${fmtDay(start)} and is paid on payroll day`, "Excludes equipment, recruitment fees and statutory costs", "No new revenue from the hire is assumed", `USD invoices converted at ₹${s.usdRate}`)
+    a.assumptions.push(`Salary starts ${fmtDay(start)} and is paid on payroll day`, "Excludes equipment, recruitment fees and statutory costs", "No new revenue from the hire is assumed")
     a.records.push(`${state.employees.length} employee records`, `${rec.open.length} open invoices`, `${state.loans.length} loans`, `${state.recurring.length} recurring costs`)
     return a
   }
@@ -206,7 +206,7 @@ export function answerQuestion(state: State, today: string, question: string): C
     a.records.push(...rec.overdue.map((r) => `${r.inv.id} · ${r.inv.paypal ? `PayPal ${r.inv.paypal.status}` : "bank transfer"}`))
     if (rec.overdue.length) a.actions.push({ label: "Prepare reminders for overdue invoices", kind: "draft-reminders" })
     a.actions.push({ label: "Open invoices", kind: "navigate", to: "invoices?tab=Overdue" })
-    a.assumptions.push(`USD invoices shown in USD; totals converted at ₹${s.usdRate}`)
+    a.assumptions.push(`All amounts are shown in ${s.currency}.`)
     return a
   }
 

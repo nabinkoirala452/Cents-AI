@@ -57,18 +57,22 @@ export async function seedDemoWorkspace(
       create: {
         id: DEMO_WORKSPACE_ID,
         name: state.settings.agencyName,
+        currency: state.settings.currency,
         agencyType: state.settings.agencyType,
         teamSize: state.settings.teamSize,
         location: state.settings.location,
         website: state.settings.website,
+        timezone: "America/Chicago",
         seededOn: state.seededOn,
       },
       update: {
         name: state.settings.agencyName,
+        currency: state.settings.currency,
         agencyType: state.settings.agencyType,
         teamSize: state.settings.teamSize,
         location: state.settings.location,
         website: state.settings.website,
+        timezone: "America/Chicago",
         seededOn: state.seededOn,
       },
     })
@@ -77,7 +81,6 @@ export async function seedDemoWorkspace(
       where: { workspaceId: DEMO_WORKSPACE_ID },
       create: {
         workspaceId: DEMO_WORKSPACE_ID,
-        usdRate: state.settings.usdRate,
         safetyThreshold: state.settings.safetyThreshold,
         defaultHorizon: state.settings.defaultHorizon,
         planningScenario: state.settings.planningScenario,
@@ -91,7 +94,6 @@ export async function seedDemoWorkspace(
         dismissedInsights: json(state.dismissedInsights),
       },
       update: {
-        usdRate: state.settings.usdRate,
         safetyThreshold: state.settings.safetyThreshold,
         defaultHorizon: state.settings.defaultHorizon,
         planningScenario: state.settings.planningScenario,
@@ -237,7 +239,6 @@ export async function seedDemoWorkspace(
           recipient: approval.recipient,
           amount: approval.amount,
           currency: approval.currency,
-          amountINR: approval.amountINR,
           refId: approval.refId,
           preparedBy: approval.preparedBy,
           requestedAt: date(approval.requestedAt),

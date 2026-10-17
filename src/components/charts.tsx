@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { compactINR, money } from "../lib/format"
+import { compactMoney, money } from "../lib/format"
 import type { Scenario } from "../lib/types"
 
 export type ForecastRow = {
@@ -57,7 +57,7 @@ export function ForecastChart({ rows, series, focus, lowPoint, height = "100%" }
         </defs>
         <CartesianGrid stroke="var(--border)" vertical={false} strokeDasharray="3 4" />
         <XAxis dataKey="label" axisLine={false} tickLine={false} interval={interval} tick={{ fill: "var(--muted)", fontSize: 10 }} />
-        <YAxis axisLine={false} tickLine={false} width={52} tick={{ fill: "var(--muted)", fontSize: 10 }} tickFormatter={(v: number) => compactINR(v)} />
+        <YAxis axisLine={false} tickLine={false} width={52} tick={{ fill: "var(--muted)", fontSize: 10 }} tickFormatter={(v: number) => compactMoney(v)} />
         <Tooltip
           contentStyle={{ border: "1px solid var(--border)", borderRadius: 8, fontSize: 11, background: "var(--card)", color: "var(--text)" }}
           formatter={(value, name) => [money(Number(value)), NAMES[String(name)] ?? String(name)]}

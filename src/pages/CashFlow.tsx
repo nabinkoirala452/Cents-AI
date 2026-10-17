@@ -30,7 +30,7 @@ export default function CashFlowPage() {
   const exportSchedule = () =>
     download(
       `centsai-cash-schedule-${scenario}-${today}.csv`,
-      toCsv([["Date", "Item", "Type", "Certainty", "Amount (INR)", "Projected balance (INR)"], ...fc.ledger.map((e) => [e.date, e.label, KIND_LABEL[e.kind], e.certainty, e.amount, e.balance])]),
+      toCsv([["Date", "Item", "Type", "Certainty", `Amount (${s.currency})`, `Projected balance (${s.currency})`], ...fc.ledger.map((e) => [e.date, e.label, KIND_LABEL[e.kind], e.certainty, e.amount, e.balance])]),
     )
 
   return (
@@ -157,7 +157,6 @@ function AssumptionsModal({ close }: { close: () => void }) {
   const { state, update, log, actor, toast, can } = useStore()
   const open = state.invoices.filter((i) => i.status === "Sent")
   const [threshold, setThreshold] = useState(state.settings.safetyThreshold)
-  const [rate, setRate] = useState(state.settings.usdRate)
   const [overrides, setOverrides] = useState<Record<string, string>>(
     Object.fromEntries(open.map((i) => [i.id, i.expectedDelayOverride == null ? "" : String(i.expectedDelayOverride)])),
   )
@@ -172,24 +171,20 @@ function AssumptionsModal({ close }: { close: () => void }) {
         if (!can.edit) return toast("Viewers can't change assumptions.")
         update((d) => {
           d.settings.safetyThreshold = Math.max(0, threshold)
-          d.settings.usdRate = rate > 0 ? rate : d.settings.usdRate
           for (const inv of d.invoices) {
             if (!(inv.id in overrides)) continue
             const v = overrides[inv.id]
             inv.expectedDelayOverride = v === "" ? undefined : Math.max(0, Number(v))
           }
         })
-        log({ actor, action: "Assumptions updated", detail: `Threshold ${money(threshold)} · USD rate ₹${rate} · ${Object.values(overrides).filter(Boolean).length} receipt overrides`, outcome: "info" })
+        log({ actor, action: "Assumptions updated", detail: `Threshold ${money(threshold, state.settings.currency)} · ${Object.values(overrides).filter(Boolean).length} receipt overrides`, outcome: "info" })
         toast("Forecast recalculated with your assumptions")
         close()
       }}
     >
       <div className="form-grid">
-        <Field label="Safety threshold (₹)" hint="Days below this are flagged as risk.">
+        <Field label={`Safety threshold (${state.settings.currency})`} hint="Days below this are flagged as risk.">
           <Input type="number" min="0" step="1000" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
-        </Field>
-        <Field label="USD → INR rate" hint="Used to convert USD invoices for reporting.">
-          <Input type="number" min="1" step="0.01" value={rate} onChange={(e) => setRate(Number(e.target.value))} />
         </Field>
       </div>
       <div className="assumption-table">

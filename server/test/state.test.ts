@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
-import { cashBalance, createSeed, forecastAll, receivables, todayISO } from "../src/core"
+import { cashBalance, createSeed, forecastAll, invoiceTotal, receivables, todayISO } from "../src/core"
 import { prisma } from "../src/db"
 import { DEMO_WORKSPACE_ID, seedDemoWorkspace } from "../prisma/seed"
 import { loadState } from "../src/lib/state"
@@ -52,6 +52,19 @@ describe("loadState", () => {
       .toBe(receivables(expected, todayISO()).outstanding)
     expect(forecastAll(actual, todayISO(), 90).conservative.lowest)
       .toBe(forecastAll(expected, todayISO(), 90).conservative.lowest)
+    const actualInvoices = new Map(actual.invoices.map((invoice) => [invoice.id, invoice]))
+    for (const invoice of expected.invoices) {
+      const loaded = actualInvoices.get(invoice.id)!
+      expect(invoiceTotal(loaded)).toBe(loaded.lineItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0))
+      expect(invoiceTotal(loaded)).toBe(invoiceTotal(invoice))
+    }
+    const actualTransactions = new Map(actual.transactions.map((transaction) => [transaction.id, transaction.amount]))
+    for (const transaction of expected.transactions) {
+      expect(actualTransactions.get(transaction.id)).toBe(transaction.amount)
+    }
+    expect(actual.settings.currency).toBe("USD")
+    expect(actual.clients.every((client) => client.currency === actual.settings.currency)).toBe(true)
+    expect(actual.invoices.every((invoice) => invoice.currency === actual.settings.currency)).toBe(true)
     expect(actual.audit.every((event) => event.action.startsWith("Sample · "))).toBe(true)
   })
 
@@ -70,7 +83,6 @@ describe("loadState", () => {
         recipient: "Acme Technologies",
         amount: 650,
         currency: "USD",
-        amountINR: 54_600,
         refId: "INV-1042",
         preparedBy: "test",
         requestedAt: new Date(),
@@ -93,7 +105,6 @@ describe("loadState", () => {
         recipient: "Acme Technologies",
         amount: 650,
         currency: "USD",
-        amountINR: 54_600,
         refId: "INV-1042",
         preparedBy: "test",
         requestedAt: new Date("2026-10-17T00:00:00.000Z"),

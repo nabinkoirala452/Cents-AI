@@ -206,16 +206,16 @@ export default function AuthPage({
               </div>
               <label>
                 Reporting currency
-                <Select defaultValue="INR">
-                  <option value="INR">INR — Indian Rupee</option>
+                <Select defaultValue="USD">
+                  <option value="USD">USD — US Dollar</option>
                 </Select>
               </label>
               <div className="registration-note">
                 <ShieldCheck size={16} />
                 <span>
                   This creates a local demonstration workspace with sample
-                  records. Client invoices can be billed in INR (bank transfer)
-                  or USD (PayPal Sandbox).
+                  records. All workspace amounts are in USD. Clients can pay
+                  by PayPal or bank transfer.
                 </span>
               </div>
             </>

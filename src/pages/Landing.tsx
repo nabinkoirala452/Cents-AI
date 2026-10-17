@@ -124,22 +124,22 @@ export default function LandingPage({ navigate }: { navigate: (view: View) => vo
                       <small>GOOD MORNING, ALEX</small>
                       <strong>Your finances, clearly explained.</strong>
                     </div>
-                    <Badge tone="green">Healthy position</Badge>
+                    <Badge tone="amber">Watch payroll</Badge>
                   </div>
                   <div className="preview-metrics">
                     <div>
                       <span>Available cash</span>
-                      <strong>₹4,85,000</strong>
+                      <strong>$81,250</strong>
                       <small>Verified records</small>
                     </div>
                     <div>
-                      <span>Month-end forecast</span>
-                      <strong>₹2,10,000</strong>
-                      <small>Expected scenario</small>
+                      <span>90-day expected</span>
+                      <strong>$65,642</strong>
+                      <small>Expected ending cash</small>
                     </div>
                     <div>
                       <span>Outstanding</span>
-                      <strong>₹85,000</strong>
+                      <strong>$39,570</strong>
                       <small>2 overdue invoices</small>
                     </div>
                   </div>
@@ -147,7 +147,7 @@ export default function LandingPage({ navigate }: { navigate: (view: View) => vo
                     <div className="preview-chart">
                       <div>
                         <strong>Cash position</strong>
-                        <small>Next 30 days</small>
+                        <small>Next 90 days</small>
                       </div>
                       <svg
                         viewBox="0 0 500 150"
@@ -165,8 +165,8 @@ export default function LandingPage({ navigate }: { navigate: (view: View) => vo
                       </svg>
                       <div className="preview-chart-axis">
                         <span>Today</span>
-                        <span>24 Oct</span>
-                        <span>30 Oct</span>
+                        <span>21 Nov</span>
+                        <span>15 Jan</span>
                       </div>
                     </div>
                     <div className="preview-brief">
@@ -176,7 +176,7 @@ export default function LandingPage({ navigate }: { navigate: (view: View) => vo
                       <div>
                         <span className="brief-dot alert" />
                         <p>
-                          <strong>Collect ₹85,000</strong>
+                          <strong>Collect $10,610</strong>
                           <small>Two invoices are overdue</small>
                         </p>
                       </div>
@@ -198,7 +198,7 @@ export default function LandingPage({ navigate }: { navigate: (view: View) => vo
               </div>
               <span>
                 <small>Cash-flow risk</small>
-                <strong>24 October</strong>
+                <strong>21 November</strong>
               </span>
             </div>
             <div className="hero-float hero-float-ai">
@@ -317,24 +317,24 @@ export default function LandingPage({ navigate }: { navigate: (view: View) => vo
               <span>
                 <Sparkles size={14} /> CentsAI analysis
               </span>
-              <Badge tone="green">Based on 8 records</Badge>
+              <Badge tone="green">Based on workspace records</Badge>
             </div>
             <p>Can we afford to hire another developer?</p>
             <div className="how-answer">
               <strong>Not comfortably in the conservative scenario.</strong>
               <span>
-                Hiring now would reduce monthly headroom by ₹45,000. Cash could
+                Hiring now would reduce monthly headroom by $5,600. Cash could
                 fall below your safety threshold if Acme pays late.
               </span>
             </div>
             <div className="how-stats">
               <div>
                 <span>Lowest balance</span>
-                <strong>₹84,000</strong>
+                <strong>$5,634</strong>
               </div>
               <div>
                 <span>Threshold breaches</span>
-                <strong>3 days</strong>
+                <strong>7 days</strong>
               </div>
             </div>
             <Button variant="primary" onClick={() => navigate("app")}>

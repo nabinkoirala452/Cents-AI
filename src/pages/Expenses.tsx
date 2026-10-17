@@ -4,7 +4,7 @@ import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAx
 import { Badge, Button, Card, CardHeader, Field, FormModal, Input, MetricCard, Select, Title } from "../components/ui"
 import { addDays, dayInMonth, fmtDay, fmtMonth } from "../lib/dates"
 import { expenseInsights, monthlyEquivalent, monthToDate, periodTotals } from "../lib/finance"
-import { compactINR, money, pct } from "../lib/format"
+import { compactMoney, money, pct } from "../lib/format"
 import { go } from "../lib/router"
 import { useStore } from "../lib/store"
 import type { RecurringCost } from "../lib/types"
@@ -147,7 +147,7 @@ export default function ExpensesPage() {
             <BarChart data={trend} margin={{ top: 8, right: 8, left: 4, bottom: 0 }}>
               <CartesianGrid stroke="var(--border)" vertical={false} strokeDasharray="3 4" />
               <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: "var(--muted)", fontSize: 10 }} />
-              <YAxis axisLine={false} tickLine={false} width={52} tick={{ fill: "var(--muted)", fontSize: 10 }} tickFormatter={(v: number) => compactINR(v)} />
+              <YAxis axisLine={false} tickLine={false} width={52} tick={{ fill: "var(--muted)", fontSize: 10 }} tickFormatter={(v: number) => compactMoney(v)} />
               <Tooltip contentStyle={{ border: "1px solid var(--border)", borderRadius: 8, fontSize: 11, background: "var(--card)" }} formatter={(v) => money(Number(v))} />
               <Legend wrapperStyle={{ fontSize: 10 }} iconSize={8} />
               {[...TREND_CATEGORIES, "Other"].map((c, i) => (
@@ -213,7 +213,7 @@ export default function ExpensesPage() {
 }
 
 function AddRecurring({ close }: { close: () => void }) {
-  const { today, update, log, actor, toast } = useStore()
+  const { state, today, update, log, actor, toast } = useStore()
   const [d, setD] = useState({ vendor: "", category: "Software" as RecurringCost["category"], amount: "", cycle: "Monthly" as RecurringCost["cycle"], nextDate: addDays(today, 7) })
   return (
     <FormModal
@@ -249,7 +249,7 @@ function AddRecurring({ close }: { close: () => void }) {
             <option>Tax</option>
           </Select>
         </Field>
-        <Field label="Amount (₹)">
+        <Field label={`Amount (${state.settings.currency})`}>
           <Input type="number" min="1" value={d.amount} onChange={(e) => setD({ ...d, amount: e.target.value })} required />
         </Field>
         <Field label="Billing cycle">
@@ -265,4 +265,3 @@ function AddRecurring({ close }: { close: () => void }) {
     </FormModal>
   )
 }
-

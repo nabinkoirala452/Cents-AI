@@ -67,7 +67,7 @@ export default function TransactionsPage() {
   const exportCsv = () =>
     download(
       `centsai-transactions-${period.replace(/\s/g, "-").toLowerCase()}.csv`,
-      toCsv([["id", "date", "description", "party", "category", "type", "amount_inr", "status", "source", "reference"], ...filtered.map((t) => [t.id, t.date, t.description, t.party, t.category, t.type, t.amount, t.status, t.source, t.reference])]),
+      toCsv([["id", "date", "description", "party", "category", "type", `amount_${state.settings.currency.toLowerCase()}`, "status", "source", "reference"], ...filtered.map((t) => [t.id, t.date, t.description, t.party, t.category, t.type, t.amount, t.status, t.source, t.reference])]),
     )
 
   const reset = () => setPageNo(0)
@@ -77,7 +77,7 @@ export default function TransactionsPage() {
       <div className="page-intro">
         <div>
           <Title>Transactions</Title>
-          <p>Every rupee recorded in your agency ledger, with its source and verification status.</p>
+          <p>Every amount recorded in your agency ledger, with its source and verification status.</p>
         </div>
         <div className="intro-actions">
           <Select value={period} onChange={(e) => { setPeriod(e.target.value); reset() }} aria-label="Period">
@@ -256,7 +256,6 @@ export default function TransactionsPage() {
               <Check size={14} /> Source kept on every record ({new Set(state.transactions.map((t) => t.source)).size} sources)
             </p>
           </div>
-          <small className="section-note">Amounts are stored in INR. USD receipts are converted at the rate in Settings.</small>
         </Card>
       </div>
 
@@ -402,7 +401,7 @@ function TransactionForm({ record, close }: { record?: Transaction; close: () =>
             <option>Expense</option>
           </Select>
         </Field>
-        <Field label="Amount (₹)">
+        <Field label={`Amount (${state.settings.currency})`}>
           <Input type="number" min="1" disabled={locked} value={draft.amount} onChange={(e) => set({ amount: e.target.value })} placeholder="0" required />
         </Field>
         <Field label="Description" full>
@@ -432,7 +431,7 @@ function TransactionForm({ record, close }: { record?: Transaction; close: () =>
           </Select>
         </Field>
         <Field label="Reference" full>
-          <Input value={draft.reference} disabled={locked} onChange={(e) => set({ reference: e.target.value })} placeholder="Invoice, receipt or UTR number" />
+          <Input value={draft.reference} disabled={locked} onChange={(e) => set({ reference: e.target.value })} placeholder="Invoice, receipt or bank reference" />
         </Field>
         <Field label="Notes" full>
           <Textarea value={draft.notes} onChange={(e) => set({ notes: e.target.value })} placeholder="Optional context" />
@@ -480,7 +479,7 @@ function ImportWizard({ close }: { close: () => void }) {
     return body.map((r, i) => {
       const cell = (f: MapField) => (mapping[f] >= 0 ? r[mapping[f]] ?? "" : "")
       const date = parseLooseDate(cell("date")) ?? undefined
-      const rawAmount = cell("amount").replace(/[₹,\s]|INR|Rs\.?/gi, "")
+      const rawAmount = cell("amount").replace(/[,\s$]/g, "")
       const signed = Number(rawAmount)
       const t = cell("type").toLowerCase()
       const type: TxnType | undefined = /inc|cr|credit|in/.test(t) ? "Income" : /exp|dr|debit|out/.test(t) ? "Expense" : t === "" && Number.isFinite(signed) && signed !== 0 ? (signed < 0 ? "Expense" : "Income") : undefined

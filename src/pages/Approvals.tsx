@@ -66,7 +66,7 @@ export default function ApprovalsPage() {
             <button key={t.role} className={`tier ${s.role === t.role ? "active" : ""}`} onClick={() => switchRole(t.role)}>
               <span className="eyebrow">{t.role.toUpperCase()}</span>
               <strong>{t.tier}</strong>
-              <small>{t.role === "Finance Manager" ? `${t.detail.replace("the configured limit", money(s.managerApprovalLimit))}` : t.detail}</small>
+              <small>{t.role === "Finance Manager" ? `${t.detail.replace("the configured limit", money(s.managerApprovalLimit, s.currency))}` : t.detail}</small>
               {s.role === t.role && <Badge tone="green">Acting as</Badge>}
             </button>
           ))}
@@ -93,7 +93,6 @@ export default function ApprovalsPage() {
                   </div>
                   <b>
                     {money(a.amount, a.currency)}
-                    {a.currency !== "INR" && <small className="muted"> ≈ {money(a.amountINR)}</small>}
                   </b>
                   <div>
                     <Badge tone={STATUS_TONE[a.status]}>{a.status}</Badge>
@@ -147,12 +146,12 @@ export default function ApprovalsPage() {
 function ReviewModal({ approval: a, close }: { approval: Approval; close: () => void }) {
   const { state, approve, reject, confirmContractorPayment, toast } = useStore()
   const s = state.settings
-  const allowed = permissions(s).approve(a.amountINR)
+  const allowed = permissions(s).approve(a.amount)
   const [reason, setReason] = useState("")
   const [reference, setReference] = useState("")
   const [busy, setBusy] = useState(false)
   const blockedReason =
-    s.role === "Viewer" ? "Viewers can’t approve actions." : `Exceeds the ${money(s.managerApprovalLimit)} Finance Manager limit — Owner approval required.`
+    s.role === "Viewer" ? "Viewers can’t approve actions." : `Exceeds the ${money(s.managerApprovalLimit, s.currency)} Finance Manager limit — Owner approval required.`
 
   return (
     <Modal onClose={close} className="review-modal">
@@ -164,7 +163,7 @@ function ReviewModal({ approval: a, close }: { approval: Approval; close: () => 
       <div className="approval-data">
         <span>Action <strong>{a.title}</strong></span>
         <span>Recipient <strong>{a.recipient}</strong></span>
-        <span>Amount <strong>{money(a.amount, a.currency)} {a.currency}{a.currency !== "INR" ? ` (≈ ${money(a.amountINR)})` : ""}</strong></span>
+        <span>Amount <strong>{money(a.amount, a.currency)} {a.currency}</strong></span>
         <span>Fees <strong>{a.kind === "paypal_send_invoice" ? "Charged by PayPal on receipt; shown after verification" : "None recorded"}</strong></span>
         <span>Environment <Badge tone="amber">{a.kind === "paypal_send_invoice" || a.kind === "send_reminder" ? "PayPal Sandbox" : "Manual · bank"}</Badge></span>
         <span>Prepared by <strong>{a.preparedBy}</strong></span>
@@ -234,8 +233,8 @@ function ReviewModal({ approval: a, close }: { approval: Approval; close: () => 
       )}
       {a.status === "Submitted" && a.kind === "record_contractor_payment" && (
         <>
-          <Field label="Bank transfer reference (UTR)">
-            <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. ICICN52026101798765" />
+          <Field label="Bank transfer reference">
+            <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. ACH-20261017-98765" />
           </Field>
           <div className="modal-actions">
             <Button onClick={close}>Later</Button>

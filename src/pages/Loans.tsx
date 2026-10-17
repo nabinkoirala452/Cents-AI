@@ -13,8 +13,8 @@ export default function LoansPage() {
   const loans = useMemo(() => state.loans.map((l) => ({ l, st: loanStatus(l, today) })), [state.loans, today])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
-  const [calc, setCalc] = useState({ principal: 500000, rate: 12, months: 36 })
-  const [prepay, setPrepay] = useState({ loanId: state.loans[0]?.id ?? "", oneTime: 50000, monthly: 0 })
+  const [calc, setCalc] = useState({ principal: 62500, rate: 12, months: 36 })
+  const [prepay, setPrepay] = useState({ loanId: state.loans[0]?.id ?? "", oneTime: 6250, monthly: 0 })
 
   const outstanding = loans.reduce((s, x) => s + x.st.outstanding, 0)
   const emiTotal = loans.filter((x) => x.st.remainingMonths > 0).reduce((s, x) => s + x.st.emi, 0)
@@ -116,7 +116,7 @@ export default function LoansPage() {
         <Card>
           <CardHeader title="EMI Calculator" action={<Calculator size={17} />} />
           <div className="compact-form-grid">
-            <Field label="Loan principal (₹)">
+            <Field label={`Loan principal (${state.settings.currency})`}>
               <Input type="number" min="0" step="10000" value={calc.principal} onChange={(e) => setCalc({ ...calc, principal: Number(e.target.value) })} />
             </Field>
             <Field label="Annual interest rate (%)">
@@ -166,10 +166,10 @@ export default function LoansPage() {
                 ))}
               </Select>
             </Field>
-            <Field label="One-time prepayment (₹)">
+            <Field label={`One-time prepayment (${state.settings.currency})`}>
               <Input type="number" min="0" step="5000" value={prepay.oneTime} onChange={(e) => setPrepay({ ...prepay, oneTime: Number(e.target.value) })} />
             </Field>
-            <Field label="Extra each month (₹)">
+            <Field label={`Extra each month (${state.settings.currency})`}>
               <Input type="number" min="0" step="1000" value={prepay.monthly} onChange={(e) => setPrepay({ ...prepay, monthly: Number(e.target.value) })} />
             </Field>
           </div>
@@ -282,7 +282,7 @@ export default function LoansPage() {
 }
 
 function LoanForm({ close }: { close: () => void }) {
-  const { today, update, log, actor, toast } = useStore()
+  const { state, today, update, log, actor, toast } = useStore()
   const [d, setD] = useState({ name: "", lender: "", principal: "", rate: "", tenure: "24", startDate: today, emiDay: String(Math.min(28, parseISO(today).getDate())), fee: "" })
   const emi = emiFor(Number(d.principal), Number(d.rate), Number(d.tenure))
   return (
@@ -312,7 +312,7 @@ function LoanForm({ close }: { close: () => void }) {
         <Field label="Lender">
           <Input value={d.lender} onChange={(e) => setD({ ...d, lender: e.target.value })} required />
         </Field>
-        <Field label="Principal (₹)">
+        <Field label={`Principal (${state.settings.currency})`}>
           <Input type="number" min="1" value={d.principal} onChange={(e) => setD({ ...d, principal: e.target.value })} required />
         </Field>
         <Field label="Annual rate (%)">

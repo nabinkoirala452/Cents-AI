@@ -1,0 +1,3 @@
+ALTER TYPE "Currency" ADD VALUE 'EUR';
+ALTER TYPE "Currency" ADD VALUE 'GBP';
+ALTER TYPE "Currency" ADD VALUE 'CAD';

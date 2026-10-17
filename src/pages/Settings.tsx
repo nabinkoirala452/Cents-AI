@@ -115,13 +115,10 @@ function SectionBody({ section }: { section: Section }) {
       <>
         <Heading title="Financial Preferences" copy="Thresholds and defaults used by every forecast, alert and simulation." />
         <div className="settings-form">
-          <Field label="Reporting currency" hint="All ledger amounts are stored in INR.">
-            <Input readOnly value="INR — Indian Rupee" />
+          <Field label="Reporting currency" hint="Every amount uses the workspace currency; no FX conversion is applied.">
+            <Input readOnly value={draft.currency} />
           </Field>
-          <Field label="USD → INR conversion rate" hint="Applied to USD (PayPal) invoices in reports and forecasts.">
-            <Input type="number" min="1" step="0.01" value={draft.usdRate} onChange={(e) => set({ usdRate: Number(e.target.value) })} />
-          </Field>
-          <Field label="Minimum cash reserve (₹)" hint="Forecast days below this are flagged.">
+          <Field label={`Minimum cash reserve (${draft.currency})`} hint="Forecast days below this are flagged.">
             <Input type="number" min="0" step="5000" value={draft.safetyThreshold} onChange={(e) => set({ safetyThreshold: Number(e.target.value) })} />
           </Field>
           <Field label="Default forecast horizon">
@@ -139,7 +136,7 @@ function SectionBody({ section }: { section: Section }) {
             </Select>
           </Field>
         </div>
-        {actions(["usdRate", "safetyThreshold", "defaultHorizon", "planningScenario"])}
+        {actions(["safetyThreshold", "defaultHorizon", "planningScenario"])}
       </>
     )
 
@@ -206,7 +203,7 @@ function SectionBody({ section }: { section: Section }) {
           </table>
         </div>
         <div className="settings-form">
-          <Field label="Finance Manager approval limit (₹)" hint="Above this, only the Owner can approve.">
+          <Field label={`Finance Manager approval limit (${draft.currency})`} hint="Above this, only the Owner can approve.">
             <Input type="number" min="0" step="5000" disabled={state.settings.role !== "Owner"} value={draft.managerApprovalLimit} onChange={(e) => set({ managerApprovalLimit: Number(e.target.value) })} />
           </Field>
           <Field label="Acting as (demo)" hint="Switch roles to test permission tiers.">

@@ -30,13 +30,8 @@ export const emiFor = (principal: number, rate: number, months: number) => {
 export const invoiceTotal = (inv: Invoice) =>
   inv.lineItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
 
-export const toINR = (amount: number, currency: Invoice["currency"], s: Settings) =>
-  currency === "INR" ? amount : Math.round(amount * s.usdRate)
-
-export const invoiceINR = (inv: Invoice, s: Settings) => toINR(invoiceTotal(inv), inv.currency, s)
-
 export const clientOf = (state: State, id: string): Client =>
-  state.clients.find((c) => c.id === id) ?? { id, name: "Unknown client", email: "", country: "", currency: "INR", avgDelayDays: 0 }
+  state.clients.find((c) => c.id === id) ?? { id, name: "Unknown client", email: "", country: "", currency: state.settings.currency, avgDelayDays: 0 }
 
 export const projectOf = (state: State, id?: string) => state.projects.find((p) => p.id === id)
 
@@ -127,7 +122,7 @@ export type OpenInvoice = {
   inv: Invoice
   client: Client
   state: InvoiceState
-  amountINR: number
+  amount: number
   daysOverdue: number
   priority: number
   reason: string
@@ -139,12 +134,12 @@ export const receivables = (state: State, today: string) => {
     .filter((inv) => inv.status === "Sent")
     .map((inv) => {
       const client = clientOf(state, inv.clientId)
-      const amountINR = invoiceINR(inv, s)
+      const amount = invoiceTotal(inv)
       const daysOverdue = Math.max(0, -diffDays(inv.dueDate, today))
       const st = invoiceState(inv, today)
       // Priority: bigger, older, slower-paying invoices first.
       const priority = Math.round(
-        (amountINR / 1000) * (1 + daysOverdue / 7) * (client.avgDelayDays >= 10 ? 1.3 : 1) * (st === "Due soon" ? 0.6 : st === "Open" ? 0.3 : 1),
+        (amount / 1000) * (1 + daysOverdue / 7) * (client.avgDelayDays >= 10 ? 1.3 : 1) * (st === "Due soon" ? 0.6 : st === "Open" ? 0.3 : 1),
       )
       const reason =
         st === "Overdue"
@@ -152,16 +147,16 @@ export const receivables = (state: State, today: string) => {
           : st === "Due soon"
             ? `Due ${fmtDay(inv.dueDate)}`
             : `Due ${fmtDay(inv.dueDate)}`
-      return { inv, client, state: st, amountINR, daysOverdue, priority, reason }
+      return { inv, client, state: st, amount, daysOverdue, priority, reason }
     })
     .sort((a, b) => b.priority - a.priority)
-  const sum = (rows: OpenInvoice[]) => rows.reduce((acc, r) => acc + r.amountINR, 0)
+  const sum = (rows: OpenInvoice[]) => rows.reduce((acc, r) => acc + r.amount, 0)
   const overdue = open.filter((r) => r.state === "Overdue")
   const dueSoon = open.filter((r) => r.state === "Due soon")
   const monthStart = `${monthKey(today)}-01`
   const paidThisMonth = state.invoices
     .filter((i) => i.status === "Paid" && i.paidDate && i.paidDate >= monthStart && i.paidDate <= today)
-    .reduce((acc, i) => acc + invoiceINR(i, s), 0)
+    .reduce((acc, i) => acc + invoiceTotal(i), 0)
   return {
     open,
     outstanding: sum(open),
@@ -261,7 +256,7 @@ export const buildEvents = (state: State, today: string, horizonDays: number, sc
           : addDays(inv.dueDate, delay + (overdue || delay >= 10 ? 30 : 7))
     date = addDays(date, mods.delays?.[inv.id] ?? 0)
     if (date <= today) date = addDays(today, 3)
-    push({ date, label: `${client.name} · ${inv.id}`, amount: invoiceINR(inv, s), kind: "receivable", certainty: overdue ? "Uncertain" : "Expected", ref: inv.id })
+    push({ date, label: `${client.name} · ${inv.id}`, amount: invoiceTotal(inv), kind: "receivable", certainty: overdue ? "Uncertain" : "Expected", ref: inv.id })
   }
 
   // Draft invoices and planned milestones: billed in future, so never "Uncertain" yet, but slip in the conservative case.
@@ -271,7 +266,7 @@ export const buildEvents = (state: State, today: string, horizonDays: number, sc
     if (inv.status !== "Draft" || mods.skipInvoices?.includes(inv.id)) continue
     const client = clientOf(state, inv.clientId)
     const date = addDays(plannedReceipt(inv.dueDate < today ? addDays(today, 15) : inv.dueDate, client.avgDelayDays), mods.delays?.[inv.id] ?? 0)
-    push({ date, label: `${client.name} · ${inv.id} (draft)`, amount: invoiceINR(inv, s), kind: "planned", certainty: "Expected", ref: inv.id })
+    push({ date, label: `${client.name} · ${inv.id} (draft)`, amount: invoiceTotal(inv), kind: "planned", certainty: "Expected", ref: inv.id })
   }
   for (const p of state.projects) {
     if (p.status !== "Active" || mods.dropRetainers?.includes(p.id)) continue
@@ -485,8 +480,8 @@ export const projectStats = (state: State, p: Project) => {
   const otherIncome = state.transactions
     .filter((t) => t.projectId === p.id && t.type === "Income" && !t.invoiceId)
     .reduce((sum, t) => sum + t.amount, 0)
-  const billed = projectInvoices.reduce((sum, i) => sum + invoiceINR(i, s), 0) + otherIncome
-  const collected = projectInvoices.filter((i) => i.status === "Paid").reduce((sum, i) => sum + invoiceINR(i, s), 0) + otherIncome
+  const billed = projectInvoices.reduce((sum, i) => sum + invoiceTotal(i), 0) + otherIncome
+  const collected = projectInvoices.filter((i) => i.status === "Paid").reduce((sum, i) => sum + invoiceTotal(i), 0) + otherIncome
   const cost = labour + contractors + direct
   const contribution = billed - cost
   const margin = billed > 0 ? (contribution / billed) * 100 : 0
@@ -624,7 +619,7 @@ export const buildBriefing = (state: State, today: string, horizonDays: number =
       id: `approvals-${pending.map((a) => a.id).join("-")}`,
       severity: "medium",
       title: `${pending.length} action${pending.length > 1 ? "s" : ""} awaiting your approval`,
-      amount: money(pending.reduce((s2, a) => s2 + a.amountINR, 0)),
+      amount: money(pending.reduce((s2, a) => s2 + a.amount, 0), s.currency),
       detail: "Nothing is sent or paid until an authorised person approves it.",
       evidence: pending.map((a) => a.title).join(" · "),
       calculation: "Pending items in the approval queue",

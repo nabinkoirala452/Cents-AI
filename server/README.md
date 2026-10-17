@@ -39,6 +39,9 @@ The seed creates `owner@centsai.demo` (Owner), `finance@centsai.demo`
 All accounts use the password set by `SEED_DEMO_PASSWORD`; no demo password is
 stored in source control.
 
+Each workspace has one currency. The demo workspace uses USD, and all finance
+calculations and records use that currency without FX conversion.
+
 ## Database tests
 
 `npm test` uses the configured `DATABASE_URL` as a connection only. Before

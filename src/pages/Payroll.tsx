@@ -14,7 +14,7 @@ export default function PayrollPage() {
   const [window_, setWindow] = useState<7 | 14 | 30>(14)
   const [editing, setEditing] = useState<Employee | "new" | null>(null)
   const [addingBill, setAddingBill] = useState(false)
-  const [hire, setHire] = useState({ salary: 45000, start: dayInMonth(today, 1, 1), equipment: 65000, other: 5000 })
+  const [hire, setHire] = useState({ salary: 5600, start: dayInMonth(today, 1, 1), equipment: 8130, other: 630 })
 
   const payroll = monthlyPayroll(state)
   const unpaid = state.contractorBills.filter((b) => b.status !== "Paid")
@@ -195,16 +195,16 @@ export default function PayrollPage() {
         <Card className="hire-panel">
           <CardHeader title="What Would a New Hire Cost?" action={<Calculator size={17} />} />
           <div className="compact-form-grid">
-            <Field label="Monthly salary (₹)">
+            <Field label={`Monthly salary (${state.settings.currency})`}>
               <Input type="number" min="0" step="1000" value={hire.salary} onChange={(e) => setHire({ ...hire, salary: Number(e.target.value) })} />
             </Field>
             <Field label="Start date">
               <Input type="date" min={today} value={hire.start} onChange={(e) => setHire({ ...hire, start: e.target.value })} />
             </Field>
-            <Field label="Equipment (₹)">
+            <Field label={`Equipment (${state.settings.currency})`}>
               <Input type="number" min="0" step="1000" value={hire.equipment} onChange={(e) => setHire({ ...hire, equipment: Number(e.target.value) })} />
             </Field>
-            <Field label="Other monthly costs (₹)">
+            <Field label={`Other monthly costs (${state.settings.currency})`}>
               <Input type="number" min="0" step="500" value={hire.other} onChange={(e) => setHire({ ...hire, other: Number(e.target.value) })} />
             </Field>
           </div>
@@ -273,7 +273,7 @@ function EmployeeForm({ record, close }: { record?: Employee; close: () => void 
         <Field label="Role">
           <Input value={d.role} onChange={(e) => setD({ ...d, role: e.target.value })} required />
         </Field>
-        <Field label="Monthly salary (₹)">
+        <Field label={`Monthly salary (${state.settings.currency})`}>
           <Input type="number" min="1" value={d.monthlySalary} onChange={(e) => setD({ ...d, monthlySalary: e.target.value })} required />
         </Field>
         <Field label="Start date" hint="A future date marks the hire as Planned.">
@@ -325,7 +325,7 @@ function BillForm({ close }: { close: () => void }) {
         <Field label="Invoice reference">
           <Input value={d.reference} onChange={(e) => setD({ ...d, reference: e.target.value })} />
         </Field>
-        <Field label="Amount (₹)">
+        <Field label={`Amount (${state.settings.currency})`}>
           <Input type="number" min="1" value={d.amount} onChange={(e) => setD({ ...d, amount: e.target.value })} required />
         </Field>
         <Field label="Due date">

@@ -4,7 +4,7 @@ import { InvoiceRows } from "../components/finance-ui"
 import { Badge, Button, Card, Drawer, Field, FormModal, Input, MetricCard, Note, Select, Tabs, Textarea, Title } from "../components/ui"
 import { addDays, fmtDate, fmtDay, fmtStamp, relativeDue } from "../lib/dates"
 import { draftReminder, type ReminderTone } from "../lib/drafts"
-import { buildEvents, clientOf, invoiceINR, invoiceState, invoiceTotal, projectOf, receivables, stateTone } from "../lib/finance"
+import { buildEvents, clientOf, invoiceState, invoiceTotal, projectOf, receivables, stateTone } from "../lib/finance"
 import { money } from "../lib/format"
 import { PAYPAL_MODE, paypalEligibility } from "../lib/paypal"
 import { routeParams } from "../lib/router"
@@ -32,7 +32,7 @@ export default function InvoicesPage() {
       return (tab === "All" || st === tab) && `${client.name} ${inv.id} ${inv.lineItems[0]?.description}`.toLowerCase().includes(query.toLowerCase())
     })
     .sort((a, b) => {
-      if (sort === "amount") return invoiceINR(b, state.settings) - invoiceINR(a, state.settings)
+      if (sort === "amount") return invoiceTotal(b) - invoiceTotal(a)
       if (sort === "due") return a.dueDate.localeCompare(b.dueDate)
       return (priority.get(b.id)?.priority ?? -1) - (priority.get(a.id)?.priority ?? -1) || b.issueDate.localeCompare(a.issueDate)
     })
@@ -55,7 +55,7 @@ export default function InvoicesPage() {
         </div>
       </div>
       <div className="demo-note">
-        <ShieldCheck size={14} /> PayPal {PAYPAL_MODE} for USD invoices · INR invoices by bank transfer · Ledger updates only after verification.
+        <ShieldCheck size={14} /> PayPal {PAYPAL_MODE} or bank transfer · Ledger updates only after verification or a recorded bank reference.
       </div>
       <div className="metric-grid">
         <MetricCard label="Total Outstanding" value={money(rec.outstanding)} detail={`Across ${rec.open.length} open invoices`} />
@@ -174,7 +174,6 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
         <Badge tone={stateTone(st)}>{st}</Badge>
         <div className="drawer-amount">
           <strong>{money(total, inv.currency)}</strong>
-          {inv.currency !== "INR" && <small>≈ {money(invoiceINR(inv, state.settings))} at ₹{state.settings.usdRate}/USD</small>}
         </div>
       </div>
       <div className="detail-section">
@@ -201,7 +200,7 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
         </div>
         <div>
           <span>Collection channel</span>
-          <strong>{inv.channel === "PayPal" ? "PayPal Sandbox" : "Bank transfer"}</strong>
+          <strong>{inv.currency} · {inv.channel === "PayPal" ? "PayPal" : "Bank transfer"}</strong>
         </div>
       </div>
       <div className="line-items">
@@ -373,8 +372,8 @@ function RecordPaymentModal({ inv, close }: { inv: Invoice; close: () => void })
         <Field label="Date received">
           <Input type="date" max={today} value={date} onChange={(e) => setDate(e.target.value)} required />
         </Field>
-        <Field label="Bank reference (UTR)" full hint="Required — the reference links this ledger entry to your bank statement.">
-          <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. HDFCN52026101712345" required />
+        <Field label="Bank transfer reference" full hint="Required — the reference links this ledger entry to your bank statement.">
+          <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. ACH-20261017-12345" required />
         </Field>
       </div>
     </FormModal>
@@ -388,6 +387,7 @@ function CreateInvoice({ close, onCreated }: { close: () => void; onCreated: (id
   const projects = state.projects.filter((p) => p.clientId === clientId)
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "")
   const [kind, setKind] = useState<Invoice["kind"]>("Milestone")
+  const [channel, setChannel] = useState<Invoice["channel"]>("PayPal")
   const [issueDate, setIssueDate] = useState(today)
   const [terms, setTerms] = useState(15)
   const [items, setItems] = useState<LineItem[]>([{ description: "", quantity: 1, unitPrice: 0 }])
@@ -400,7 +400,7 @@ function CreateInvoice({ close, onCreated }: { close: () => void; onCreated: (id
     <FormModal
       eyebrow="NEW CLIENT INVOICE"
       title={`Create ${nextId}`}
-      submitLabel={client.currency === "USD" && sendNow ? "Create & request PayPal send" : "Save draft"}
+      submitLabel={channel === "PayPal" && sendNow ? "Create & request PayPal send" : "Save draft"}
       wide
       onClose={close}
       onSubmit={() => {
@@ -409,14 +409,14 @@ function CreateInvoice({ close, onCreated }: { close: () => void; onCreated: (id
         if (!clean.length) return toast("Add at least one line item with a description and a positive amount.")
         const inv: Invoice = {
           id: nextId, clientId, projectId: projectId || undefined, kind, issueDate, dueDate: addDays(issueDate, terms),
-          currency: client.currency, lineItems: clean, status: "Draft", channel: client.currency === "USD" ? "PayPal" : "Bank transfer", reminders: [],
+          currency: state.settings.currency, lineItems: clean, status: "Draft", channel, reminders: [],
         }
         update((d) => {
           d.invoices.unshift(inv)
         })
         log({ actor, action: "Invoice drafted", detail: `${inv.id} · ${client.name} · ${money(total, client.currency)}`, ref: inv.id, outcome: "info" })
         close()
-        if (client.currency === "USD" && sendNow) {
+        if (channel === "PayPal" && sendNow) {
           setTimeout(() => toast(requestPayPalSend(inv.id).message), 0)
         } else toast(`${inv.id} saved as draft`)
         onCreated(inv.id)
@@ -466,8 +466,11 @@ function CreateInvoice({ close, onCreated }: { close: () => void; onCreated: (id
             <option value={45}>Net 45</option>
           </Select>
         </Field>
-        <Field label="Currency & channel" hint={client.currency === "USD" ? "Collected through PayPal invoicing (Sandbox)." : "INR — collected by bank transfer and recorded manually."}>
-          <Input readOnly value={client.currency === "USD" ? "USD · PayPal" : "INR · Bank transfer"} />
+        <Field label="Currency & channel" hint={channel === "PayPal" ? `Collected through PayPal invoicing (${PAYPAL_MODE}).` : "The client pays by ACH or wire; record payment with the bank reference."}>
+          <Select value={channel} onChange={(e) => setChannel(e.target.value as Invoice["channel"])}>
+            <option value="PayPal">{state.settings.currency} · PayPal</option>
+            <option value="Bank transfer">{state.settings.currency} · Bank transfer</option>
+          </Select>
         </Field>
       </div>
       <div className="line-editor">
@@ -491,11 +494,10 @@ function CreateInvoice({ close, onCreated }: { close: () => void; onCreated: (id
           </Button>
           <strong>
             Total {money(total, client.currency)}
-            {client.currency === "USD" && total > 0 && <small> ≈ {money(total * state.settings.usdRate)}</small>}
           </strong>
         </div>
       </div>
-      {client.currency === "USD" && (
+      {channel === "PayPal" && (
         <label className="check-row">
           <input type="checkbox" checked={sendNow} onChange={(e) => setSendNow(e.target.checked)} />
           <span>Prepare a PayPal send request for approval after saving</span>

@@ -1,25 +1,30 @@
 import type { Currency } from "./types"
 
-export const money = (value: number, currency: Currency = "INR") => {
-  const rounded = currency === "INR" ? Math.round(value) : Math.round(value * 100) / 100
-  const abs = Math.abs(rounded)
-  const body =
-    currency === "INR"
-      ? `₹${abs.toLocaleString("en-IN")}`
-      : `$${abs.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
-  return rounded < 0 ? `−${body}` : body
+export const money = (value: number, currency: Currency = "USD") => {
+  const rounded = Math.round(value * 100) / 100
+  const hasCents = Math.abs(rounded - Math.round(rounded)) > Number.EPSILON
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  }).format(rounded)
 }
 
-export const signedMoney = (value: number, currency: Currency = "INR") =>
+export const signedMoney = (value: number, currency: Currency = "USD") =>
   value > 0 ? `+${money(value, currency)}` : money(value, currency)
 
-/** Compact INR for chart axes: ₹4.9L, ₹85k. */
-export const compactINR = (value: number) => {
+export const compactMoney = (value: number, currency: Currency = "USD") => {
   const abs = Math.abs(value)
-  const sign = value < 0 ? "−" : ""
-  if (abs >= 100000) return `${sign}₹${(abs / 100000).toFixed(abs >= 1000000 ? 0 : 1)}L`
-  if (abs >= 1000) return `${sign}₹${Math.round(abs / 1000)}k`
-  return `${sign}₹${Math.round(abs)}`
+  const sign = value < 0 ? "-" : ""
+  const symbol = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  }).formatToParts(0).find((part) => part.type === "currency")?.value ?? currency
+  if (abs >= 1_000_000) return `${sign}${symbol}${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`
+  if (abs >= 1_000) return `${sign}${symbol}${Math.round(abs / 1_000)}k`
+  return `${sign}${symbol}${Math.round(abs)}`
 }
 
 export const pct = (value: number, digits = 1) =>

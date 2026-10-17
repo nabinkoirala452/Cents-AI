@@ -3,7 +3,7 @@ import { ArrowRight, Bookmark, BriefcaseBusiness, Clock3, CreditCard, Laptop, Sp
 import { ChartLegend, ForecastChart } from "../components/charts"
 import { Badge, Button, Card, Field, Input, Select, Title } from "../components/ui"
 import { addDays, dayInMonth, diffDays, fmtDate, fmtDay, fmtStamp } from "../lib/dates"
-import { cashBalance, clientOf, forecast, invoiceINR, monthlyPayroll, nextPayroll, receivables, type CashEvent, type ForecastMods } from "../lib/finance"
+import { cashBalance, clientOf, forecast, monthlyPayroll, nextPayroll, receivables, type CashEvent, type ForecastMods } from "../lib/finance"
 import { money } from "../lib/format"
 import { go, routeParams } from "../lib/router"
 import { useStore } from "../lib/store"
@@ -57,9 +57,9 @@ export default function SimulatorPage() {
   const [x, setX] = useState<Inputs>(() => {
     const clientInvoice = open.find((r) => r.inv.clientId === params.get("client"))?.inv.id
     return {
-      amount: Number(params.get("salary")) || 45000,
+      amount: Number(params.get("salary")) || 5600,
       start: dayInMonth(today, 1, 1),
-      oneTime: 65000,
+      oneTime: 8130,
       extraMonthly: 0,
       months: 3,
       invoiceId: clientInvoice ?? open[0]?.inv.id ?? "",
@@ -137,7 +137,7 @@ export default function SimulatorPage() {
         <Card className="scenario-form">
           {(type === "hire" || type === "contractor" || type === "subscription" || type === "purchase") && (
             <>
-              <Field label={type === "hire" ? "Monthly salary (₹)" : type === "purchase" ? "Amount (₹)" : "Monthly cost (₹)"}>
+              <Field label={type === "hire" ? `Monthly salary (${state.settings.currency})` : type === "purchase" ? `Amount (${state.settings.currency})` : `Monthly cost (${state.settings.currency})`}>
                 <Input type="number" min="0" step="1000" value={x.amount} onChange={(e) => set({ amount: Number(e.target.value) })} />
               </Field>
               <Field label={type === "purchase" ? "Purchase date" : "Start date"}>
@@ -147,10 +147,10 @@ export default function SimulatorPage() {
           )}
           {type === "hire" && (
             <>
-              <Field label="Equipment & setup, one-time (₹)">
+              <Field label={`Equipment & setup, one-time (${state.settings.currency})`}>
                 <Input type="number" min="0" step="1000" value={x.oneTime} onChange={(e) => set({ oneTime: Number(e.target.value) })} />
               </Field>
-              <Field label="Other monthly costs (₹)" hint="Licences, benefits, statutory contributions">
+              <Field label={`Other monthly costs (${state.settings.currency})`} hint="Licences, benefits, statutory contributions">
                 <Input type="number" min="0" step="500" value={x.extraMonthly} onChange={(e) => set({ extraMonthly: Number(e.target.value) })} />
               </Field>
             </>
@@ -166,7 +166,7 @@ export default function SimulatorPage() {
                 <Select value={x.invoiceId} onChange={(e) => set({ invoiceId: e.target.value })}>
                   {open.map((r) => (
                     <option key={r.inv.id} value={r.inv.id}>
-                      {r.inv.id} · {r.client.name} · {money(r.amountINR)}
+                      {r.inv.id} · {r.client.name} · {money(r.amount, state.settings.currency)}
                     </option>
                   ))}
                 </Select>
@@ -209,7 +209,7 @@ export default function SimulatorPage() {
             <Button icon={Bookmark} onClick={saveScenario}>
               Save scenario
             </Button>
-            <Button variant="primary" icon={Zap} onClick={() => go(`copilot?q=${encodeURIComponent(type === "hire" ? `Can we afford to hire at ₹${x.amount} per month?` : type === "late" && lateInv ? `Can we cover payroll if ${clientOf(state, lateInv.clientId).name.split(" ")[0]} pays ${x.days} days late?` : "What does our cash forecast look like?")}`)}>
+            <Button variant="primary" icon={Zap} onClick={() => go(`copilot?q=${encodeURIComponent(type === "hire" ? `Can we afford to hire at $${x.amount} per month?` : type === "late" && lateInv ? `Can we cover payroll if ${clientOf(state, lateInv.clientId).name.split(" ")[0]} pays ${x.days} days late?` : "What does our cash forecast look like?")}`)}>
               Ask CentsAI
             </Button>
           </div>
@@ -300,7 +300,7 @@ export default function SimulatorPage() {
               <ul className="recommend-list">
                 {safeShift != null && <li>Starting on <b>{fmtDate(addDays(x.start, safeShift))}</b> ({safeShift} days later) keeps cash above the threshold in this scenario.</li>}
                 {rec.overdueTotal > 0 && <li>Collecting the <b>{money(rec.overdueTotal)}</b> in overdue invoices first would cover most of the gap.</li>}
-                {type === "late" && lateInv && <li>Send a reminder for {lateInv.id} now — {money(invoiceINR(lateInv, state.settings))} depends on it.</li>}
+                {type === "late" && lateInv && <li>Send a reminder for {lateInv.id} now — {money(rec.open.find((item) => item.inv.id === lateInv.id)?.amount ?? 0, state.settings.currency)} depends on it.</li>}
                 {type === "lose" && <li>Replacing the retainer within {Math.max(1, Math.round(diffDays(after.firstBreach, today) / 30))} month(s) avoids the shortfall.</li>}
               </ul>
             )}

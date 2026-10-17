@@ -56,11 +56,11 @@ export const sampleCsv = (today: string) => {
   const day = (n: number) => addDays(today, -n)
   const dmy = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`
   return `date,description,amount,type,party,category
-${day(9)},Domain renewal,"1,450",Expense,GoDaddy,Software
-${day(7)},Workshop fee,25000,Income,Spring & Co.,Other income
-${dmy(day(5))},Team lunch,3200,Expense,Swiggy,
-${day(4)},Stock photos,1800,Expense,Shutterstock,Marketing
-${day(22)},LinkedIn campaign,12000,Expense,LinkedIn,Marketing
+${day(9)},Domain renewal,"180",Expense,GoDaddy,Software
+${day(7)},Workshop fee,3120,Income,Spring & Co.,Other income
+${dmy(day(5))},Team lunch,400,Expense,Local Cafe,
+${day(4)},Stock photos,230,Expense,Shutterstock,Marketing
+${day(22)},LinkedIn campaign,1500,Expense,LinkedIn,Marketing
 ${day(3)},Refund,abc,Income,Unknown,
 `
 }

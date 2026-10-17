@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { todayISO } from "./dates"
 import { draftReminder, type ReminderTone } from "./drafts"
-import { clientOf, findDuplicate, invoiceINR, invoiceTotal } from "./finance"
+import { clientOf, findDuplicate, invoiceTotal } from "./finance"
 import { money, uid } from "./format"
 import { paypalEligibility, paypalSandbox } from "./paypal"
 import { createSeed, STATE_VERSION } from "./seed"
@@ -29,8 +29,8 @@ export const permissions = (s: Settings) => ({
   view: true,
   prepare: s.role !== "Viewer",
   edit: s.role !== "Viewer",
-  approve: (amountINR: number) =>
-    s.role === "Owner" || (s.role === "Finance Manager" && amountINR <= s.managerApprovalLimit),
+  approve: (amount: number) =>
+    s.role === "Owner" || (s.role === "Finance Manager" && amount <= s.managerApprovalLimit),
 })
 
 export const actorName = (s: Settings) =>
@@ -165,7 +165,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         recipient: client.name,
         amount: invoiceTotal(inv),
         currency: inv.currency,
-        amountINR: invoiceINR(inv, st.settings),
         refId: inv.id,
         preparedBy: opts.preparedBy,
         draft: opts.draft ?? draftReminder(inv, client, st.settings, today, opts.tone),
@@ -188,7 +187,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         recipient: client.name,
         amount: invoiceTotal(inv),
         currency: inv.currency,
-        amountINR: invoiceINR(inv, st.settings),
         refId: inv.id,
         steps: ["Create the invoice in PayPal Sandbox", `Send it to ${client.email}`, "Verify PayPal reports status SENT before marking it sent"],
       })
@@ -202,8 +200,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         title: `Pay contractor invoice · ${bill.reference}`,
         recipient: bill.vendor,
         amount: bill.amount,
-        currency: "INR",
-        amountINR: bill.amount,
+        currency: fresh().settings.currency,
         refId: bill.id,
         steps: [`Owner transfers ${money(bill.amount)} from the agency bank account`, "Confirm the transfer reference in CentsAI", "Ledger records the expense only after confirmation"],
       })
@@ -217,8 +214,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         title: `Cancel subscription · ${r.vendor}`,
         recipient: r.vendor,
         amount: r.amount,
-        currency: "INR",
-        amountINR: r.amount,
+        currency: fresh().settings.currency,
         refId: r.id,
         steps: ["Stop the recurring cost from the next renewal in the forecast", "Owner cancels with the vendor (no vendor integration)", "Log the decision"],
       })
@@ -233,11 +229,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const approve: Store["approve"] = async (id) => {
       const a = fresh().approvals.find((x) => x.id === id)
       if (!a || a.status !== "Pending") return { ok: false, message: "This request is no longer pending." }
-      if (!can.approve(a.amountINR)) {
+      if (!can.approve(a.amount)) {
         const message =
           s.role === "Viewer"
             ? "Viewers cannot approve actions."
-            : `${money(a.amountINR)} exceeds the ${money(s.managerApprovalLimit)} Finance Manager limit — Owner approval required.`
+            : `${money(a.amount, a.currency)} exceeds the ${money(s.managerApprovalLimit, s.currency)} Finance Manager limit — Owner approval required.`
         log({ actor, action: "Approval blocked", detail: `${a.title}: ${message}`, ref: a.id, outcome: "warning" })
         return { ok: false, message }
       }
@@ -353,7 +349,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           target.paidDate = today
         })
         const st = fresh()
-        addTransaction({ date: today, description: `Payment · ${inv.id}`, party: clientOf(st, inv.clientId).name, category: inv.kind === "Retainer" ? "Retainer income" : "Project revenue", projectId: inv.projectId, type: "Income", amount: invoiceINR(inv, st.settings), source: "PayPal", invoiceId: inv.id, reference: inv.paypal.invoiceId, status: "Verified" })
+        addTransaction({ date: today, description: `Payment · ${inv.id}`, party: clientOf(st, inv.clientId).name, category: inv.kind === "Retainer" ? "Retainer income" : "Project revenue", projectId: inv.projectId, type: "Income", amount: invoiceTotal(inv), source: "PayPal", invoiceId: inv.id, reference: inv.paypal.invoiceId, status: "Verified" })
         withdrawReminders(inv.id)
         log({ actor: "PayPal Sandbox", action: "Payment verified", detail: `${inv.id} reported PAID; ledger and forecast updated.`, ref: inv.id, outcome: "success" })
         return { ok: true, message: `${inv.id} verified as PAID — ledger updated` }
@@ -374,13 +370,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const st = fresh()
       const inv = st.invoices.find((i) => i.id === invoiceId)
       if (!inv || inv.status !== "Sent") return { ok: false, message: "Only sent, unpaid invoices can be recorded as paid." }
-      if (!reference.trim()) return { ok: false, message: "Enter the bank reference (UTR) so the payment is traceable." }
+      if (!reference.trim()) return { ok: false, message: "Enter the bank reference so the payment is traceable." }
       update((d) => {
         const target = d.invoices.find((i) => i.id === invoiceId)!
         target.status = "Paid"
         target.paidDate = date
       })
-      addTransaction({ date, description: `Payment · ${inv.id}`, party: clientOf(st, inv.clientId).name, category: inv.kind === "Retainer" ? "Retainer income" : "Project revenue", projectId: inv.projectId, type: "Income", amount: invoiceINR(inv, st.settings), source: "Invoice payment", invoiceId: inv.id, reference, status: "Recorded" })
+      addTransaction({ date, description: `Payment · ${inv.id}`, party: clientOf(st, inv.clientId).name, category: inv.kind === "Retainer" ? "Retainer income" : "Project revenue", projectId: inv.projectId, type: "Income", amount: invoiceTotal(inv), source: "Invoice payment", invoiceId: inv.id, reference, status: "Recorded" })
       withdrawReminders(inv.id)
       log({ actor, action: "Payment recorded", detail: `${inv.id} · ${money(invoiceTotal(inv), inv.currency)} · ref ${reference}`, ref: inv.id, outcome: "success" })
       return { ok: true, message: `${inv.id} marked paid and added to the ledger` }
