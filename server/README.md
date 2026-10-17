@@ -124,3 +124,32 @@ route or authenticated user/role context returns 409.
 
 API errors use `application/problem+json`. A role denial has status 403 and
 code `forbidden_role`; missing or invalid bearer tokens return a generic 401.
+
+## Approvals, PayPal, and payments
+
+Approvals are proposed from workspace records at `POST /api/v1/approvals`;
+request data cannot set the recipient, amount, currency, steps, or reminder
+draft. Approval execution verifies the record hash under row locks and performs
+external PayPal calls after committing the `Submitted` state. An approval that
+is already executing cannot be approved again. Managers are limited by the
+workspace `managerApprovalLimit`; Owners can approve any amount.
+
+`PAYPAL_MODE=sandbox` selects the real PayPal gateway and `PAYPAL_MODE=fake`
+selects the in-memory fake. Set PayPal credentials in `server/.env` only.
+`PAYPAL_ENV` and `PAYPAL_BASE_URL` must agree; `PAYPAL_SANDBOX_PAYER_EMAIL`
+overrides invoice recipients only in the sandbox. PayPal access tokens are
+cached in memory and never logged. External method/path/status/debug IDs are
+logged without request credentials or tokens.
+
+The public `POST /api/v1/webhooks/paypal` endpoint stores raw webhook events
+before verifying their signature; a duplicate provider event ID is a no-op.
+It reconciles only verified invoice events and responds with 2xx after storage.
+`POST /api/v1/invoices/:id/paypal/sync` provides the authenticated GET-based
+verification fallback. `POST /api/v1/invoices/:id/payments` records bank
+receipts using `{ "date": "YYYY-MM-DD", "reference": "bank-reference" }`.
+
+Run `npm run paypal:smoke` from `server/` only with sandbox credentials set.
+The script refuses to run unless `PAYPAL_ENV=sandbox`, creates and sends a
+one-dollar USD test invoice, then prints PayPal's status and payer URL when
+PayPal provides one. If the API omits the payer-view link, the script reports
+`(not provided)` rather than fabricating a URL.

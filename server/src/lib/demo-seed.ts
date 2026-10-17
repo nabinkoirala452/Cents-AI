@@ -71,13 +71,12 @@ export async function replaceDemoWorkspaceRecords(
       status: invoice.status,
       channel: invoice.channel === "Bank transfer" ? "BankTransfer" : "PayPal",
       paidDate: invoice.paidDate,
-      paypalInvoiceId: invoice.paypal?.invoiceId,
-      paypalStatus: invoice.paypal?.status,
-      paypalPayerUrl: invoice.paypal?.payerUrl,
-      paypalSentAt: invoice.paypal?.sentAt ? date(invoice.paypal.sentAt) : null,
-      paypalLastCheckedAt: invoice.paypal?.lastCheckedAt
-        ? date(invoice.paypal.lastCheckedAt)
-        : null,
+      paypalInvoiceId: null,
+      paypalInvoiceNumber: null,
+      paypalStatus: null,
+      paypalPayerUrl: null,
+      paypalSentAt: null,
+      paypalLastCheckedAt: null,
       reminders: json(invoice.reminders),
       expectedDelayOverride: invoice.expectedDelayOverride,
       notes: invoice.notes,
@@ -101,7 +100,9 @@ export async function replaceDemoWorkspaceRecords(
           ? "InvoicePayment"
           : transaction.source,
       invoiceId: transaction.invoiceId,
-      reference: transaction.reference,
+      reference: transaction.type === "Income" && transaction.invoiceId
+        ? transaction.invoiceId
+        : transaction.reference,
       notes: transaction.notes,
       reviewReason: transaction.reviewReason,
     })),

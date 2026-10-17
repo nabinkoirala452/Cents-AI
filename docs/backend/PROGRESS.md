@@ -75,3 +75,34 @@ Each phase appends a section: date, what changed (files), commands run and resul
 - Extracted workspace record replacement into `server/src/lib/demo-seed.ts`; both `prisma/seed.ts` and `resetDemoWorkspace()` now call that shared persistence routine. Reset remains Owner-only and gated by `ALLOW_DEMO_RESET`; it writes the “Demo data reset” audit event and does not delete audit rows.
 - **Validation passed:** `npm --prefix server run typecheck`; `npm --prefix server test` (5 files, 15 tests passed); root `npx tsc --noEmit -p .`; `git diff --check`.
 - Did not run `db:seed` or reset the shared demo workspace. `server/.env` was not modified. No schema changes, migrations, deviations, or open questions.
+
+## Phase 4 — PayPal, approvals, payments, and webhooks — 2026-10-17
+- Added the `PayPalGateway` contract, real PayPal Invoicing v2 client, cached OAuth client-credentials token, retry handling for retryable requests, sanitized method/path/status/`debug_id` logs, and an injectable fake with payment marking and failure injection. `PAYPAL_MODE=fake` selects the fake; sandbox mode selects the real gateway.
+- Added approval list/proposal/approve/reject/transfer-confirmation routes and services for all four approval kinds. Proposal inputs are resolved from workspace records; execution checks status, permissions, amount limits, and payload hashes under database row locks, then executes external work outside the initial transaction. PayPal invoice send searches by number before creation and persists its PayPal ID before sending. Reminder approvals are withdrawn when their invoice is paid or cancelled.
+- Added manual bank receipt recording and PayPal GET-based reconciliation with payment-event/transaction deduplication and transactional invoice updates. Added raw-body webhook storage before signature verification; duplicate event IDs are no-ops, and stored webhook requests receive 2xx even when verification fails.
+- Added the sandbox-only `server/scripts/paypal-smoke.ts` and `paypal:smoke` script. The first sandbox attempt created a draft but exposed that PayPal's create response can contain only a resource link, not an invoice ID. The real gateway now recovers the ID by searching for the invoice number; a mocked regression test covers this response shape.
+- **Validation passed:** `npm --prefix server run typecheck`; `npm --prefix server run build`; `npm --prefix server test` (7 files, 22 tests passed in 246.52s); root `npx tsc --noEmit -p .`.
+- **Sandbox smoke run:** the corrected script completed OAuth, create, search recovery, send, and GET successfully (HTTP 200/201/200/200/200; invoice status `SENT`). Exact script output, with the external payer link unavailable from the Sandbox API response:
+  ```
+  invoice_number: SMOKE-1792260376124
+  status: SENT
+  payer_url: (not provided)
+  ```
+  The PayPal GET response exposed no payer-view link, so no URL was fabricated. The first attempt left one unsent Sandbox draft before the response-shape recovery was added. The later review-fix smoke run below resolved the payer-view URL question.
+- No schema migrations at this point in Phase 4; the review-fix section below records the subsequent migration and SPEC update.
+
+## Phase 4 review fixes — 2026-10-17
+- Added `Invoice.paypalInvoiceNumber` and migration `20261017200000_paypal_invoice_identity`. PayPal invoice numbers are generated once with workspace/random suffixes, persisted before provider calls, reused on retries, and collision-checked against total, currency, and recipient email before linking search results.
+- Aligned the gateway and fake with PayPal response shapes: create requests ask for representation, self-link IDs are parsed, the payer URL comes from `detail.metadata.recipient_view_url`, only `PAYPAL` payment transactions are accepted, date-only payment dates remain unchanged, and a 401 clears the cached token and retries once. The fake responses pass through the shared parser.
+- Reconciliation now marks an invoice Paid only when persisted PayPal receipts cover its total. A short or absent receipt set leaves it Sent and records a warning. PayPal errors map to safe problem+json responses, and sync failures record the provider debug ID.
+- PayPal calls are captured per request, logged with Fastify/Pino, and written as audit events in the result transaction. Reconciliation audit events use the requesting member or “PayPal webhook” as actor.
+- Added retry for aged Submitted approvals, reminder-draft support, retryable webhook verification/reconciliation failures, a 64 KB webhook limit and malformed-body rejection, workspace-local date validation, and UTC date handling for reminder/contractor-payment records. Future demo seeds no longer claim invented PayPal IDs or payer URLs.
+- Updated SPEC §8 and `server/README.md` for the collision-resistant invoice number and retry behavior. The SPEC update was approved to resolve the previous raw-invoice-ID search requirement.
+- **Validation passed:** `npm --prefix server run typecheck`; `npm --prefix server test -- test/money-path.test.ts` (11 tests); `npm --prefix server test` (7 files, 31 tests passed in 282.06s); `npm --prefix server run build`; root `npx tsc --noEmit -p .`; `npm --prefix server run db:migrate` (PayPal invoice identity migration applied; schema in sync).
+- **Sandbox smoke passed:** `npm --prefix server run paypal:smoke` created, sent, and fetched one USD Sandbox invoice. PayPal returned the ID in the create response (no search call); the GET returned a real payer URL. Sanitized script output:
+  ```
+  invoice_number: SMOKE-1792263444679
+  status: SENT
+  payer_url: https://www.sandbox.paypal.com/invoice/p/#A2DVTKQSL99U6MQS
+  ```
+- No `db:seed` or demo reset was run, and `server/.env` was not modified. The standalone validation orchestrator timed out during its full-test step; the direct full backend test command completed successfully. No open questions remain.

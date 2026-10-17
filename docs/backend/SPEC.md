@@ -184,7 +184,7 @@ Then run the executor **outside** the DB transaction; write the result in a seco
 ### 8.2 Executors (no AI, built only from DB records — never from request text)
 | Kind | Execution |
 |---|---|
-| `paypal_send_invoice` | `searchInvoices(invoice_number = <INV id>)` → if none, `createDraftInvoice` → **persist `paypalInvoiceId` immediately** → `sendInvoice` → `getInvoice`; status `SENT`/`UNPAID` → invoice `Sent` + approval `Verified`; else `Failed` (store PayPal `debug_id`) |
+| `paypal_send_invoice` | If `Invoice.paypalInvoiceNumber` is empty, persist `<invoice id>-<workspace id first 6 chars>-<6 random base36 chars>` before any PayPal call. Search by that number → if none, create → persist `paypalInvoiceId` immediately → send → GET; verify the returned total, currency, recipient email, and invoice number before linking. Status `SENT`/`UNPAID` → invoice `Sent` + approval `Verified`; else `Failed` (store PayPal `debug_id`). A mismatched search result fails with `PayPal invoice number already used by a different invoice`; never link it. |
 | `send_reminder` | PayPal invoice → `remindInvoice`; bank-transfer invoice → log reminder only ("email delivery not connected"); append to `invoice.reminders`; `Verified` |
 | `record_contractor_payment` | stays `Submitted` until `confirm-transfer` with a bank reference (no payout API) |
 | `cancel_subscription` | `RecurringCost.status = Cancelled`; `Verified` |
@@ -193,26 +193,27 @@ Then run the executor **outside** the DB transaction; write the result in a seco
 - Env: `PAYPAL_ENV=sandbox`, `PAYPAL_BASE_URL=https://api-m.sandbox.paypal.com`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, optional `PAYPAL_SANDBOX_PAYER_EMAIL` (if set, used as recipient email for demo invoices so the sandbox personal account receives them).
 - Refuse to start if `PAYPAL_ENV=sandbox` but base URL is not the sandbox URL (and vice versa).
 - OAuth2 client credentials `POST /v1/oauth2/token`, cache the token until ~60s before `expires_in`.
+- Create requests send `Prefer: return=representation`; if the response omits its `id`, take it from the `rel=self` link, then use search recovery as the final fallback. Parse payer links from `detail.metadata.recipient_view_url`. Parse payment records only from `payments.transactions` entries with `type=PAYPAL`; merchant-entered `EXTERNAL` entries and `MARKED_AS_PAID` status are not verified receipts. A date-only PayPal `payment_date` remains the transaction date unchanged.
 - Endpoints: `POST /v2/invoicing/invoices`, `POST /v2/invoicing/invoices/{id}/send`, `GET /v2/invoicing/invoices/{id}`, `POST /v2/invoicing/invoices/{id}/remind`, `POST /v2/invoicing/search-invoices`, `POST /v1/notifications/verify-webhook-signature`.
-- Create payload: `detail { invoice_number: <INV id>, currency_code: <workspace currency>, invoice_date, payment_term { due_date }, note }`, `primary_recipients [{ billing_info { email_address, name { full_name: client.name } } }]`, `items [{ name, quantity: "1", unit_amount { currency_code, value: "650.00" } }]`.
-- Retries: 3× with jittered backoff on 429/5xx/network for GET and remind; for create, retry only after the search-recovery check. Never retry 4xx.
+- Create payload: `detail { invoice_number: <persisted collision-resistant Invoice.paypalInvoiceNumber>, currency_code: <workspace currency>, invoice_date, payment_term { due_date }, note }`, `primary_recipients [{ billing_info { email_address, name { full_name: client.name } } }]`, `items [{ name, quantity: "1", unit_amount { currency_code, value: "650.00" } }]`.
+- Retries: one retry with a refreshed OAuth token after any API 401; 3× with jittered backoff on 429/5xx/network for GET and remind; for create, retry only after the search-recovery check. Never retry other 4xx.
 - Audit every call: method, path, HTTP status, `paypal-debug-id`. **Never** log tokens or secrets.
 - Define an interface `PayPalGateway`; real implementation in `invoicing.ts`, in-memory fake in `fake.ts` used by tests and when `PAYPAL_MODE=fake`.
 - Every invoice defaults to channel `PayPal`. An invoice may be marked `Bank transfer` instead (client pays by ACH/wire; recorded manually with a reference). Eligibility for PayPal: channel PayPal, client email present, at least one line item, currency supported by PayPal.
 
 ### 8.4 Reconciliation (`payments` module) — used by sync, webhook, and poll
 1. `GET` the invoice from PayPal (never trust a webhook body).
-2. `PAID` / `PARTIALLY_PAID`: for each payment in the response not yet stored → `PaymentEvent(PayPal, externalId = payment transaction id)` + `Transaction(Income, Verified, source PayPal, amount = gross)`; invoice `Paid` when fully paid. All in one DB transaction. Then withdraw pending reminders (§4.1 #7).
-3. `PAYMENT_PENDING`: record nothing; forecast keeps it uncertain.
+2. `PAID` / `PARTIALLY_PAID`: for each `PAYPAL` transaction not yet stored → `PaymentEvent(PayPal, externalId = payment transaction id)` + `Transaction(Income, Verified, source PayPal, amount = gross)`; invoice `Paid` only when the sum of stored PayPal PaymentEvents reaches the invoice total. All in one DB transaction. If PayPal says `PAID` but the verified ledger sum is short, leave invoice `Sent`, set `paypalStatus`, and write a warning audit. Then withdraw pending reminders when fully paid (§4.1 #7).
+3. `PAYMENT_PENDING` / `MARKED_AS_PAID`: record nothing; forecast keeps it uncertain.
 4. `CANCELLED`: invoice `Cancelled`, withdraw reminders.
 5. Update `paypalStatus`, `paypalLastCheckedAt`; audit `Payment verified` / `Status checked`.
 
 ### 8.5 Webhook
-`POST /api/v1/webhooks/paypal` with raw body (`addContentTypeParser` keeping the raw string). Store `WebhookEvent` first
-(unique `providerEventId` → replay is a no-op, return 200). Verify via `verify-webhook-signature` using headers
+`POST /api/v1/webhooks/paypal` with raw JSON body (maximum 64 KB; require `id` and `event_type`). Store `WebhookEvent` first. A processed or definitively rejected event ID is a no-op; a stored event whose verification or reconciliation errored is retried on redelivery. Verify via `verify-webhook-signature` using headers
 `paypal-auth-algo`, `paypal-cert-url`, `paypal-transmission-id`, `paypal-transmission-sig`, `paypal-transmission-time` and
-`PAYPAL_WEBHOOK_ID`. Unverified → stored, not processed, still 200 (log warning). Verified `INVOICING.INVOICE.*` → reconcile (§8.4).
-Return 2xx only after the event is stored. Local dev needs a tunnel; the "Verify payment status" button covers the demo without it.
+`PAYPAL_WEBHOOK_ID`. Definitive signature failure → stored, not processed, 200 (log warning); verification errors or reconciliation errors → 503 for PayPal retry. Verified `INVOICING.INVOICE.*` → reconcile (§8.4). Preserve the raw event bytes when constructing the signature-verification request. Return 2xx only after successful processing, definitive rejection, or confirmed duplicate. Local dev needs a tunnel; the "Verify payment status" button covers the demo without it.
+
+If an approval remains `Submitted` for more than two minutes after a process failure, an authorised member may call `POST /api/v1/approvals/:id/retry` for `paypal_send_invoice`, `send_reminder`, or `cancel_subscription`. The executor remains idempotent; contractor transfers are confirmed only through `confirm-transfer`.
 
 ## 9. Security checklist (judged: 30% of FinTechathon)
 - Secrets only in `server/.env` (git-ignored); `server/.env.example` committed with placeholders. No secret in any `VITE_*` variable.

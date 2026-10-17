@@ -10,13 +10,21 @@ import {
 } from "fastify-type-provider-zod"
 import { z } from "zod"
 import { config } from "./config"
+import { PayPalError } from "./integrations/paypal"
 import { HttpError } from "./lib/errors"
 import { registerAuditRoutes } from "./modules/audit/routes"
+import { registerApprovalRoutes } from "./modules/approvals/routes"
 import { registerAuthRoutes } from "./modules/auth/routes"
+import { registerPaymentRoutes } from "./modules/payments/routes"
 import { registerRecordRoutes } from "./modules/records/routes"
 import { registerWorkspaceRoutes } from "./modules/workspace/routes"
+import { registerPayPalWebhookRoute } from "./modules/webhooks/routes"
 import { installAuth } from "./plugins/auth"
 import { installIdempotency } from "./plugins/idempotency"
+
+function isPayPalError(error: unknown): error is PayPalError {
+  return error instanceof PayPalError
+}
 
 export async function buildApp() {
   const app = Fastify({
@@ -87,7 +95,8 @@ export async function buildApp() {
 
   app.setErrorHandler((error: FastifyError, request, reply) => {
     const applicationError = error instanceof HttpError ? error : undefined
-    const status = applicationError?.statusCode
+    const paypalError = isPayPalError(error) ? error as PayPalError : undefined
+    const status = paypalError ? 502 : applicationError?.statusCode
       ?? (error.statusCode && error.statusCode >= 400 ? error.statusCode : 500)
     const validationIssues = error.validation
       ? z.array(z.object({
@@ -110,10 +119,12 @@ export async function buildApp() {
       .type("application/problem+json")
       .send({
         type: "about:blank",
-        title: applicationError?.title ?? (status >= 500 ? "Internal Server Error" : error.name),
+        title: paypalError ? "Bad Gateway" : applicationError?.title ?? (status >= 500 ? "Internal Server Error" : error.name),
         status,
-        code: applicationError?.code ?? (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_ERROR"),
-        detail: status >= 500 && config.nodeEnv === "production"
+        code: paypalError ? "paypal_error" : applicationError?.code ?? (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_ERROR"),
+        detail: paypalError
+          ? `PayPal request failed (HTTP ${paypalError.status ?? "unknown"})${paypalError.debugId ? ` · debug_id ${paypalError.debugId}` : ""}`
+          : status >= 500 && config.nodeEnv === "production"
           ? "An unexpected error occurred."
           : error.message,
         ...(fields ? { fields } : {}),
@@ -140,7 +151,10 @@ export async function buildApp() {
   registerAuthRoutes(app)
   registerWorkspaceRoutes(app)
   registerRecordRoutes(app)
+  registerApprovalRoutes(app)
+  registerPaymentRoutes(app)
   registerAuditRoutes(app)
+  registerPayPalWebhookRoute(app)
 
   return app
 }

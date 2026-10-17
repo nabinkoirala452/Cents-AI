@@ -59,10 +59,17 @@ describe("loadState", () => {
       const loaded = actualInvoices.get(invoice.id)!
       expect(invoiceTotal(loaded)).toBe(loaded.lineItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0))
       expect(invoiceTotal(loaded)).toBe(invoiceTotal(invoice))
+      if (invoice.channel === "PayPal") expect(loaded.paypal).toBeUndefined()
     }
-    const actualTransactions = new Map(actual.transactions.map((transaction) => [transaction.id, transaction.amount]))
+    const actualTransactions = new Map(actual.transactions.map((transaction) => [transaction.id, transaction]))
     for (const transaction of expected.transactions) {
-      expect(actualTransactions.get(transaction.id)).toBe(transaction.amount)
+      const loaded = actualTransactions.get(transaction.id)!
+      expect(loaded.amount).toBe(transaction.amount)
+      expect(loaded.reference).toBe(
+        transaction.type === "Income" && transaction.invoiceId
+          ? transaction.invoiceId
+          : transaction.reference,
+      )
     }
     expect(actual.settings.currency).toBe("USD")
     expect(actual.clients.every((client) => client.currency === actual.settings.currency)).toBe(true)

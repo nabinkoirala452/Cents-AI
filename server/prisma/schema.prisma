@@ -263,6 +263,7 @@ model Invoice {
   channel               InvoiceChannel
   paidDate              String?
   paypalInvoiceId       String?        @unique
+  paypalInvoiceNumber   String?
   paypalStatus          PayPalStatus?
   paypalPayerUrl        String?
   paypalSentAt          DateTime?

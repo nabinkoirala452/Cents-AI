@@ -195,6 +195,63 @@ Report: files changed, commands + output, tests, smoke-script result, deviations
 
 ---
 
+## Phase 4 fixes — from review (do before Phase 5)
+
+```
+Phase 4 review fixes — the money path. Read docs/backend/PROGRESS.md and SPEC §8 first. Do not overwrite server/.env. Do not run db:seed or reset the shared demo workspace. Correctness over speed.
+
+1. CRITICAL — PayPal invoice-number collisions. Today invoice_number = our invoice id (e.g. INV-1061) and search-before-create links whatever PayPal invoice has that number. The sandbox merchant account is shared by the whole team and survives every db:seed / demo reset, and after a reset INV numbers start again, so a new INV-1061 would be linked to an OLD PayPal invoice (wrong client or amount, maybe already PAID) and a sync could then mark it Paid. Fix:
+   - Add `Invoice.paypalInvoiceNumber String?` (migration; keep RLS). When the paypal_send_invoice executor first runs for an invoice and the column is empty, generate `<invoice id>-<workspace id first 6 chars>-<6 random base36 chars>`, PERSIST IT before any PayPal call, and reuse it on every later attempt or approval for that invoice. Search and create use only this number.
+   - Before linking a search result, check that its total, currency and recipient email match our invoice; if they don't, fail the approval with "PayPal invoice number already used by a different invoice" (never link it).
+   - Test: two workspaces (or a reset) each with INV-1061 → two separate PayPal invoices in the fake; a pre-existing fake invoice with the same number but a different amount is never linked.
+
+2. CRITICAL — never mark Paid without the money in the ledger. reconcilePayPalStatus sets fullyPaid when status === "PAID" even if no payment was parsed (parsePayment silently drops payments it can't read), so you get a Paid invoice with no Transaction and the cash balance is wrong. Rule: mark the invoice Paid only when the sum of its stored PayPal PaymentEvents (existing + inserted in this call) is >= the invoice total. If PayPal says PAID but that sum is short → leave the invoice Sent, set paypalStatus, write an audit event (outcome "warning", "PayPal reports PAID but payment details could not be verified") and return a result that says so. Test with a fake PAID invoice that has no payments.
+
+3. Match PayPal's real response shapes (the fake currently mirrors our own types, not PayPal):
+   - Create: send the header `Prefer: return=representation` so the 201 contains the full invoice; if it still only has `href`, take the id from the last path segment of the `rel: "self"` link; keep search as the last fallback.
+   - Payer URL: PayPal v2 puts it at `detail.metadata.recipient_view_url` (not in `links`). Read it there in parseInvoice, persist it as paypalPayerUrl. This answers the Phase 4 open question.
+   - Payments: real GET shape is `payments: { paid_amount, transactions: [{ payment_id, type, payment_date, method, amount: { currency_code, value } }] }`. Only record transactions with `type === "PAYPAL"` (an `EXTERNAL` entry is one the merchant typed in by hand in PayPal — not verified money; ignore it and treat status MARKED_AS_PAID as "not verified", like PAYMENT_PENDING). `payment_date` can be date-only ("2026-10-17"): if so, use it directly as the Transaction date instead of new Date() + timezone conversion (that shifts it a day back in America/Chicago).
+   - Make FakePayPalGateway.getInvoice return this raw PayPal JSON and run it through the SAME parser as the real gateway, so tests cover the parser. Add unit tests in paypal-gateway.test.ts with real-shaped fixtures: create with representation, create with only href, GET with recipient_view_url, PAYPAL + EXTERNAL transactions, date-only payment_date.
+   - Token: on a 401 from any API call, clear the cached token and retry that call once.
+
+4. Errors: a PayPalError reaching a route currently becomes a 500 INTERNAL_ERROR. Map it in the error handler to 502 problem+json code "paypal_error" with detail "PayPal request failed (HTTP <status>) · debug_id <id>" — no response body, no token. A PayPal 404 on GET → 409 code "paypal_invoice_not_found". Sync failures write an audit event (outcome "error") with the debug_id.
+
+5. Operation-log evidence (FinTechathon requirement): SPEC §8.3 says audit every PayPal call, but calls only go to console.info. Make the gateway logger collect calls per request, and have the executor / reconcile write one AuditEvent per PayPal call (action "PayPal API call", detail "POST /v2/invoicing/invoices → 201 · debug_id …", ref = our invoice id) in the same DB transaction as the result. Use the Fastify/pino logger instead of console.info. In reconcileInvoice, write the "Payment verified" / "Status checked" audit INSIDE the reconcile transaction and use the calling user as actor ("Verify payment status by <name>"); for webhooks the actor is "PayPal webhook".
+
+6. Stuck Submitted approvals: if the process dies after an approval is set to Submitted, it stays Submitted for ever — the partial unique index then blocks a new approval and Draft edits get approval_in_progress. Add `POST /approvals/:id/retry` (same permission rule as approve): allowed only for kinds paypal_send_invoice / send_reminder / cancel_subscription that are Submitted with decidedAt older than 2 minutes; it re-runs the executor (safe because of the persisted paypalInvoiceNumber + search-before-create) and writes the result exactly like approve. Test: approval forced to Submitted with an old decidedAt → retry → exactly one PayPal invoice, approval Verified.
+
+7. Webhook retries:
+   - If signature verification ERRORS (network/5xx from PayPal, missing PAYPAL_WEBHOOK_ID) or reconcile throws, return 503 so PayPal retries delivery. Keep 200 only for: stored + verified + processed, a definitive signature FAILURE, or a true duplicate.
+   - A repeat delivery of a stored event is a no-op ONLY if that event was processed successfully or definitively failed verification; otherwise verify and process it again.
+   - Don't store bodies that aren't JSON or that have no `id` / `event_type`: reply 400 and store nothing. Lower the webhook bodyLimit to 64 KB.
+   - Build the verify-webhook-signature request body by inserting the raw body string as-is (`'{"auth_algo":…,"webhook_id":…,"webhook_event":' + rawBody + '}'`) instead of JSON.parse → JSON.stringify, which can change the bytes and break signature checks.
+   - Tests: verification error → 503, then the retry is processed; reconcile error → 503; non-JSON body → 400 and no row.
+
+8. Dates: the reminder date, contractor bill paidDate and its transaction date use the UTC date (`toISOString().slice(0,10)`); use the workspace-local today (one shared helper in server/src/lib, reused by Phase 3 transactions and payments/service.ts localDate — no copies). Manual payment `date` must be <= workspace today and >= invoice issueDate (400 otherwise).
+
+9. Seeded fake PayPal ids: the server demo seed stores invented PayPal ids (INV2-H4ZN-…) and payer URLs on seeded invoices. In sandbox mode, "Verify payment status" on them calls PayPal for invoices that don't exist, and the data claims sends that never happened (SPEC §9). In server/src/lib/demo-seed.ts only (leave the frontend demo seed alone): keep channel PayPal and status, but store paypalInvoiceId, paypalInvoiceNumber, paypalStatus, paypalPayerUrl, paypalSentAt and paypalLastCheckedAt as null, and use the invoice id as the reference on the seeded income transactions. Update the state-parity test accordingly. Don't reseed now — this takes effect at the next seed/reset (demo day).
+
+10. Reminder draft: Phase 5 sends the reminder text the user edited. Let POST /approvals accept optional `draft` (string, max 2000) only for kind send_reminder (400 for other kinds); use it instead of the default text, include it in payloadHash, and pass it to PayPal as the `note` of the remind call.
+
+11. Small: withdrawPendingReminders takes a reason — "Withdrawn automatically — invoice was paid" / "… invoice was cancelled". Delete server/.tsupgrader/ (tool output, must not be committed) and remove its mention from PROGRESS.md.
+
+12. Run server typecheck + tests, root `npx tsc --noEmit -p .`, `npm --prefix server run db:migrate`, then `npm run paypal:smoke` again (it should now print a real payer URL and get the id from the create response without a search). Update docs/backend/PROGRESS.md and give me the Report, including the smoke output.
+```
+
+---
+
+## Phase 4 fixes, round 2 (small — before Phase 5)
+
+```
+Phase 4 round-2 fixes. Read docs/backend/PROGRESS.md first. Do not overwrite server/.env. Do not run db:seed or reset the shared demo workspace.
+
+1. Search recovery ordering (approvals/service.ts executeApproval): a search result is checked with matchesPayPalInvoice BEFORE it is fetched in full, so if PayPal's search item lacks amount or primary_recipients the crash-recovery path wrongly fails with "already used by a different invoice". Whenever search (or create-failure recovery) returns an invoice with an id, GET it by id first and run matchesPayPalInvoice on the GET result only. Make FakePayPalGateway.searchInvoiceByNumber return a partial item (id, status, detail.invoice_number only) so tests cover this; the existing "send failure → recovery" and "aged Submitted retry" tests must still pass.
+2. paidDate drift (payments/service.ts reconcilePayPalStatus): every repeat sync of an already-Paid invoice rewrites paidDate to today, which corrupts the client-delay numbers in the finance engine. Set status Paid + paidDate only when the invoice is not already Paid, and use the latest stored PayPal payment's transaction date as paidDate (not the check date). Audit "Payment verified" only when payments were inserted or the invoice just became Paid; otherwise "Status checked". Test: sync twice on a paid invoice → paidDate unchanged, one "Payment verified" audit.
+3. Run server typecheck + tests and root `npx tsc --noEmit -p .`. Update docs/backend/PROGRESS.md and give me the Report.
+```
+
+---
+
 ## Phase 5 — Frontend hosted mode (connect the UI to the API)
 
 ```

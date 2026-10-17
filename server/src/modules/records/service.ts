@@ -15,6 +15,7 @@ import type {
 import { createSeed, findDuplicate, parseLooseDate } from "../../core"
 import { config } from "../../config"
 import { prisma } from "../../db"
+import { workspaceToday } from "../../lib/dates"
 import { replaceDemoWorkspaceRecords } from "../../lib/demo-seed"
 import { HttpError } from "../../lib/errors"
 import { requireEdit, requireOwner, requireView } from "../../lib/permissions"
@@ -138,19 +139,7 @@ async function requireProjectClient(
 }
 
 export async function currentDate(ctx: RequestContext): Promise<string> {
-  const workspace = await prisma.workspace.findUnique({
-    where: { id: ctx.workspaceId },
-    select: { timezone: true },
-  })
-  if (!workspace) notFound("Workspace")
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: workspace.timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date())
-  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]))
-  return `${values.year}-${values.month}-${values.day}`
+  return workspaceToday(ctx.workspaceId)
 }
 
 type RecordCollection =
