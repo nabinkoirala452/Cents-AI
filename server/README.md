@@ -50,7 +50,8 @@ into that schema, runs the tests there, and drops the schema during teardown.
 The test does not seed or migrate the configured default schema. The database
 role therefore needs permission to create and drop schemas. If setup is
 interrupted before teardown, remove the leftover schema whose name starts with
-`centsai_test_`.
+`centsai_test_`. Test files run sequentially to avoid competing for connections
+on the configured PostgreSQL pooler.
 
 The seed is repeatable and refreshes mutable demo-workspace data. It does not
 insert sample audit rows; the audit log starts empty and is populated only by
@@ -60,8 +61,9 @@ trigger, so real events are retained on subsequent seeds. The one-time
 operation claims.
 
 Demo data dates are set when the workspace is seeded. Re-run `npm run db:seed`
-on the demo day to refresh its relative dates. Phase 3 will add an Owner-only
-demo reset endpoint.
+on the demo day to refresh its relative dates. An Owner can call
+`POST /api/v1/admin/reset-demo` only when `ALLOW_DEMO_RESET=true`; reset keeps
+the caller's workspace, membership, and append-only audit history.
 
 The Vite development server uses `http://localhost:8443`; set `CORS_ORIGIN` to
 that origin when running the frontend locally.
@@ -86,6 +88,30 @@ changes are submitted as an Owner with
 The `managerApprovalLimit` and `team` fields are Owner-only. The
 `PUT /api/v1/settings/dismissed-insights` body is
 `{ "dismissedInsights": ["insight-id"] }` and is available to any member.
+
+## Records and computed reads
+
+Owner and Finance Manager can use the record routes listed in
+`docs/backend/SPEC.md` §7 for transactions/imports, clients, projects/time
+entries, invoices, employees, contractor bills, recurring costs, loans,
+financing offers, and saved scenarios. Transaction imports accept at most
+5,000 parsed rows at `POST /api/v1/transactions/import`; invalid rows are
+skipped, `skipDuplicates=true` skips duplicates by default, and
+`skipDuplicates=false` imports duplicate rows with status `Review`. Reported
+issue row numbers start at 1 for the submitted data rows.
+
+Transaction dates are limited to today in the workspace timezone. Verified
+transactions are editable only for category, project, and notes; verified or
+invoice-linked transactions cannot be deleted. New invoices are Draft,
+workspace-currency records with server-assigned `INV-####` numbers. Only
+Draft bank-transfer invoices can be issued by the record API; PayPal invoices
+must use the later approval workflow. Contractor bills cannot be marked Paid
+and subscriptions cannot be cancelled directly; those state transitions must
+use the authorised approval flow.
+
+`GET /api/v1/cashflow/forecast`, `/api/v1/dashboard/summary`, and
+`/api/v1/briefing` are read-only and compute their figures through the shared
+finance engine using the authenticated workspace State.
 
 Every successful workspace mutation inserts an append-only audit event in the
 same database transaction. Members can read the scoped event feed at

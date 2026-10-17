@@ -48,6 +48,16 @@ Each phase appends a section: date, what changed (files), commands run and resul
 - **Validation passed:** from `server/`, `npm run typecheck`; `npm test -- --reporter=dot` (4 test files, 9 tests passed; includes login success/failure, token and membership checks, role matrix, audit append-only update/delete rejection, CSV escaping, and idempotency replay/conflict). From the repository root, `npx tsc --noEmit -p .` passed.
 - No Prisma schema changes were needed, so migrations were not run. No deviations from the requested Phase 2 behavior; no open questions.
 
+## Phase 3 — record routes and computed reads — 2026-10-17
+- Added workspace-scoped CRUD routes and services for transactions, clients, projects/time entries, invoices, employees, contractor bills, recurring costs/review, loans, financing offers, and saved scenarios. Mutations validate with Zod, enforce permissions in the service, and append audit events transactionally.
+- Added transaction import with per-row server validation, a 5,000-row limit, duplicate skip/flag behavior, ImportJob persistence, and imported/duplicates/invalid counts. Transaction IDs use `TXN-`; workspace-local today bounds transaction dates; duplicate transactions are created in Review with a reason.
+- Added invoice creation with workspace currency and concurrency-safe `INV-####` allocation; enforced Draft/Sent editing rules, stale open approvals after Draft edits, Draft-only deletion, and Bank-transfer-only issuing outside the PayPal approval flow.
+- Preserved approval boundaries: Verified transactions cannot have financial fields edited or be deleted, invoice-linked transactions cannot be deleted, contractor bills cannot be marked Paid, recurring costs cannot be cancelled through these routes, and PayPal invoices cannot be issued directly.
+- Added forecast, dashboard summary, and briefing read endpoints backed by `loadState` and shared `core.ts` finance functions. Added Owner-only demo reset gated by `ALLOW_DEMO_RESET=true`, reusing the demo seed while retaining workspace identity and append-only audit history.
+- Updated `server/README.md`; registered the records routes in `server/src/app.ts`; added `server/test/records.test.ts`; configured Vitest to run files serially with a 120-second test timeout after parallel runs timed out against the configured database pooler.
+- **Validation passed:** `npm --prefix server run typecheck`; `npm --prefix server run build`; `npm --prefix server test` (5 files, 15 tests passed); root `npx tsc --noEmit -p .`; `git diff --check`.
+- No Prisma schema changes or migrations were needed. The requested approvals, PayPal, payments, and webhooks routes remain out of scope for this phase. No open questions.
+
 ## Phase 2 review fixes — 2026-10-17
 - Stopped seeding synthetic audit history; sample approvals remain. Removed the `loadState()` relabelling hack so audit records now reflect their stored event evidence.
 - Added and applied `20261017180000_remove_fake_demo_audit`, which temporarily disables the append-only trigger only to delete `AU-2` through `AU-9` for `centsai-demo`, then re-enables the trigger.

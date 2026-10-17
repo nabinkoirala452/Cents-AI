@@ -162,6 +162,20 @@ Report: files changed, commands + output, tests, deviations, open questions.
 
 ---
 
+## Phase 3 fixes — from review (small; do before Phase 4)
+
+```
+Phase 3 review fixes. Read docs/backend/PROGRESS.md first. Do not overwrite server/.env. Do not run db:seed or reset the shared demo workspace.
+
+1. GET /cashflow/forecast: accept a comma-separated scenario list as the SPEC says (`scenario=expected,conservative` currently returns 400). Default = all three. Validate each item.
+2. Bodyless POST/DELETE routes (e.g. POST /admin/reset-demo, POST /invoices/:id/issue, DELETE …): accept a missing body, an empty body and `{}` alike. Today a POST with no body is rejected with 400. Add tests for both forms.
+3. Invoice draft edit/delete must not touch an approval that is already executing: if the invoice has an approval in status "Submitted", reject the PATCH/DELETE with 409 code "approval_in_progress". Only "Pending" approvals become "Stale". Same rule anywhere else Stale is set. Test both cases.
+4. resetDemoWorkspace() re-implements the seed (~170 lines). Refactor so the admin reset and prisma/seed.ts call ONE shared function (e.g. server/src/lib/demo-seed.ts) for the workspace's records, so they cannot drift. Keep: Owner-only, ALLOW_DEMO_RESET guard, audit event "Demo data reset", audit rows never deleted.
+5. Run server typecheck + tests and root `npx tsc --noEmit -p .`. Update docs/backend/PROGRESS.md and give me the Report.
+```
+
+---
+
 ## Phase 4 — Approvals, PayPal Sandbox, payments, webhook (the money path)
 
 ```

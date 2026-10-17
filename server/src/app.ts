@@ -13,6 +13,7 @@ import { config } from "./config"
 import { HttpError } from "./lib/errors"
 import { registerAuditRoutes } from "./modules/audit/routes"
 import { registerAuthRoutes } from "./modules/auth/routes"
+import { registerRecordRoutes } from "./modules/records/routes"
 import { registerWorkspaceRoutes } from "./modules/workspace/routes"
 import { installAuth } from "./plugins/auth"
 import { installIdempotency } from "./plugins/idempotency"
@@ -124,6 +125,7 @@ export async function buildApp() {
   installIdempotency(app)
   registerAuthRoutes(app)
   registerWorkspaceRoutes(app)
+  registerRecordRoutes(app)
   registerAuditRoutes(app)
 
   return app
