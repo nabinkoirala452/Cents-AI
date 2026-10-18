@@ -15,6 +15,7 @@ import { HttpError } from "./lib/errors"
 import { registerAuditRoutes } from "./modules/audit/routes"
 import { registerApprovalRoutes } from "./modules/approvals/routes"
 import { registerAuthRoutes } from "./modules/auth/routes"
+import { registerCopilotRoutes } from "./modules/copilot/routes"
 import { registerPaymentRoutes } from "./modules/payments/routes"
 import { registerRecordRoutes } from "./modules/records/routes"
 import { registerWorkspaceRoutes } from "./modules/workspace/routes"
@@ -150,6 +151,7 @@ export async function buildApp() {
     status: "ok",
     paypalMode: config.paypalMode,
     paypalEnvironment: config.paypalEnv,
+    copilotEngine: config.copilotEngine,
   }))
 
   installAuth(app)
@@ -160,6 +162,7 @@ export async function buildApp() {
   registerApprovalRoutes(app)
   registerPaymentRoutes(app)
   registerAuditRoutes(app)
+  registerCopilotRoutes(app)
   registerPayPalWebhookRoute(app)
 
   return app

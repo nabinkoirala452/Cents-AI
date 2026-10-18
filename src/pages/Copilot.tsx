@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, Check, ChevronDown, Database, Eraser, Send, ShieldCheck, Sparkles, Wrench } from "lucide-react"
 import { Badge, Button, Card, CardHeader, Input, Title } from "../components/ui"
+import { api, hostedMode } from "../lib/api"
 import { answerQuestion, SUGGESTED_QUESTIONS, type CopilotAction, type CopilotAnswer } from "../lib/copilot"
 import { buildEvents, cashBalance, receivables } from "../lib/finance"
 import { money } from "../lib/format"
@@ -9,7 +10,7 @@ import { ROLE_TIERS, useStore } from "../lib/store"
 import type { ChatMessage } from "../lib/types"
 
 export default function CopilotPage() {
-  const { state, today, update, prepareReminder, toast, can } = useStore()
+  const { state, today, update, prepareReminder, toast, can, copilotEngine } = useStore()
   const [message, setMessage] = useState("")
   const [thinking, setThinking] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -27,6 +28,24 @@ export default function CopilotPage() {
     })
     setMessage("")
     setThinking(q)
+    if (hostedMode) {
+      // Server-side: Claude picks the finance tools; numbers come from the engine.
+      const history = stateRef.current.chat.slice(-8).map((m) => ({
+        role: m.role,
+        text: m.role === "assistant" && m.answer ? [m.answer.headline, ...m.answer.paragraphs].join("\n") : m.text,
+      }))
+      api.askCopilot(q, history)
+        .then(({ answer }) =>
+          update((d) => {
+            d.chat.push({ id: `m-${Date.now()}-a`, role: "assistant", text: answer.headline, answer })
+          }))
+        .catch((cause: unknown) =>
+          update((d) => {
+            d.chat.push({ id: `m-${Date.now()}-e`, role: "assistant", text: `I couldn't answer that: ${cause instanceof Error ? cause.message : "the server did not respond"}.` })
+          }))
+        .finally(() => setThinking(null))
+      return
+    }
     window.setTimeout(() => {
       const answer = answerQuestion(stateRef.current, today, q)
       update((d) => {
@@ -90,6 +109,11 @@ export default function CopilotPage() {
           <Badge tone="green">
             <ShieldCheck size={12} /> Grounded in workspace records
           </Badge>
+          {hostedMode && copilotEngine === "claude" && (
+            <Badge tone="blue">
+              <Sparkles size={12} /> Claude
+            </Badge>
+          )}
           {state.chat.length > 0 && (
             <Button variant="ghost" icon={Eraser} onClick={() => update((d) => { d.chat = [] })}>
               Clear
@@ -181,7 +205,13 @@ export default function CopilotPage() {
           </Card>
           <div className="privacy-note">
             <ShieldCheck size={15} />
-            <span>Prototype: the agent routes questions to deterministic finance tools in the browser. In the backend phase an LLM will call the same tools — numbers will still come from the engine, never from the model.</span>
+            <span>
+              {!hostedMode
+                ? "Demo mode: questions are routed to deterministic finance tools by keyword rules in your browser. In hosted mode Claude chooses the same tools on the server."
+                : copilotEngine === "claude"
+                  ? "Claude runs on the server and chooses which read-only finance tools to call. Every figure and table comes from the finance engine; amounts in Claude's wording are checked against tool output, and it cannot send, pay or approve anything."
+                  : "The server has no LLM configured, so questions are routed to the finance tools by keyword rules. Numbers come from the same engine either way."}
+            </span>
           </div>
         </div>
       </div>
@@ -277,6 +307,12 @@ function AssistantMessage({ answer, text, onAction }: { answer?: CopilotAnswer; 
               <b>Missing data:</b> {answer.missing.join(" · ")}
             </span>
           </div>
+        )}
+        {answer.engine && (
+          <small className="section-note">
+            {answer.engine === "claude" ? "Written by Claude from tool results" : "Rule-based answer"}
+            {answer.grounding?.checked && (answer.grounding.unverified.length ? " · some figures not found in tool output" : " · every amount matches tool output")}
+          </small>
         )}
         <button className="explain-toggle" onClick={() => setShowTrace(!showTrace)} aria-expanded={showTrace}>
           How I got this · {answer.trace.length} tool call{answer.trace.length === 1 ? "" : "s"} <ChevronDown size={13} />

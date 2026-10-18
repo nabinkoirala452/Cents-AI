@@ -75,6 +75,7 @@ type Store = {
   signedInName: string
   paypalMode: "sandbox" | "fake"
   paypalEnvironment: "sandbox" | "live"
+  copilotEngine: "claude" | "rules"
   refresh: () => Promise<void>
   login: (email: string, password: string) => Promise<void>
   signOut: () => void
@@ -163,6 +164,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const healthRequest = useRef<Promise<Awaited<ReturnType<typeof api.health>>> | null>(null)
   const [paypalMode, setPaypalMode] = useState<"sandbox" | "fake">("fake")
   const [paypalEnvironment, setPaypalEnvironment] = useState<"sandbox" | "live">("sandbox")
+  const [copilotEngine, setCopilotEngine] = useState<"claude" | "rules">("rules")
   const [toastMessage, setToastMessage] = useState("")
   const toastTimer = useRef<number | undefined>(undefined)
   const [pendingRequests, setPendingRequests] = useState(0)
@@ -229,6 +231,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setState(refreshed)
       if (health.paypalMode) setPaypalMode(health.paypalMode)
       if (health.paypalEnvironment) setPaypalEnvironment(health.paypalEnvironment)
+      if (health.copilotEngine) setCopilotEngine(health.copilotEngine)
       hasHydrated.current = true
       setInitialLoading(false)
       setLoadError("")
@@ -870,7 +873,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     return {
       state, mode: hostedMode ? "hosted" : "demo", initialLoading, loadError, authMessage, authenticated,
-      signedInName, paypalMode, paypalEnvironment, refresh, login, signOut,
+      signedInName, paypalMode, paypalEnvironment, copilotEngine, refresh, login, signOut,
       today, update, log, toast, toastMessage,
       pendingRequests, highlightedId, setHighlightedId,
       clearToast: () => setToastMessage(""),
@@ -893,7 +896,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       checkPayPalStatus, simulatePayerPayment, recordManualPayment, markSentManually,
     }
   }, [state, today, update, log, toast, toastMessage, initialLoading, loadError, authMessage, authenticated,
-    signedInName, paypalMode, paypalEnvironment, refresh, login, signOut, pendingRequests, highlightedId, setHighlightedId])
+    signedInName, paypalMode, paypalEnvironment, copilotEngine, refresh, login, signOut, pendingRequests, highlightedId, setHighlightedId])
 
   return <StoreContext.Provider value={store}>{children}</StoreContext.Provider>
 }

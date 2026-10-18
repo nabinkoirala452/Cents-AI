@@ -33,6 +33,10 @@ const environmentSchema = z.object({
   PAYPAL_CLIENT_SECRET: optionalValue,
   PAYPAL_WEBHOOK_ID: optionalValue,
   PAYPAL_SANDBOX_PAYER_EMAIL: optionalValue,
+  COPILOT_MODE: z.enum(["claude", "rules"]).default("claude"),
+  ANTHROPIC_API_KEY: optionalValue,
+  ANTHROPIC_MODEL: z.string().min(1).default("claude-opus-5-5"),
+  COPILOT_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
 })
 
 const parsed = environmentSchema.safeParse(process.env)
@@ -69,4 +73,9 @@ export const config = {
   paypalClientSecret: parsed.data.PAYPAL_CLIENT_SECRET,
   paypalWebhookId: parsed.data.PAYPAL_WEBHOOK_ID,
   paypalSandboxPayerEmail: parsed.data.PAYPAL_SANDBOX_PAYER_EMAIL,
+  // Claude writes copilot wording only when a key is configured; otherwise the rule-based router answers.
+  copilotEngine: parsed.data.COPILOT_MODE === "claude" && parsed.data.ANTHROPIC_API_KEY ? "claude" as const : "rules" as const,
+  anthropicApiKey: parsed.data.ANTHROPIC_API_KEY,
+  anthropicModel: parsed.data.ANTHROPIC_MODEL,
+  copilotEffort: parsed.data.COPILOT_EFFORT,
 } as const

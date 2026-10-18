@@ -153,3 +153,24 @@ The script refuses to run unless `PAYPAL_ENV=sandbox`, creates and sends a
 one-dollar USD test invoice, then prints PayPal's status and payer URL when
 PayPal provides one. If the API omits the payer-view link, the script reports
 `(not provided)` rather than fabricating a URL.
+
+## Copilot (Claude)
+
+`POST /api/v1/copilot/ask` with `{ "question": "...", "history": [{ "role": "user" | "assistant", "text": "..." }] }`
+returns `{ answer, engine }`, where `answer` has the same shape the frontend copilot renders. Any workspace member,
+including a Viewer, may ask; it is limited to 20 requests per minute.
+
+- Claude (`ANTHROPIC_MODEL`, default `claude-opus-5-5`) picks which finance tools to call from `src/lib/copilot.ts`
+  and writes the headline and paragraphs. The tools are read-only and run the shared finance engine on `loadState()`,
+  so figures, tables, records, assumptions and actions all come from the engine, not the model.
+- Every currency amount and percentage in Claude's wording is checked against the tool output. Amounts that don't match
+  are listed in `answer.grounding.unverified` and shown to the user as "verify before relying on it".
+- Record text (client names, notes, descriptions) is passed as data. The model has no write tools, so prompt injection
+  cannot send, pay, approve or edit anything. Actions such as "Prepare reminders" are buttons the user clicks, and they
+  then go through the normal approval workflow.
+- Each answer writes a `Copilot answered` audit event with the engine, tools used, token counts and any unverified figures.
+- With `COPILOT_MODE=rules` or no `ANTHROPIC_API_KEY`, the deterministic keyword router answers instead. It also answers,
+  with a note, if Claude declines, is rate limited or can't be reached. `/api/v1/health` reports `copilotEngine`.
+
+Environment: `ANTHROPIC_API_KEY` (server only, never a `VITE_*` variable), `ANTHROPIC_MODEL`,
+`COPILOT_EFFORT` (`low`–`max`, default `medium`), `COPILOT_MODE` (`claude` | `rules`).
