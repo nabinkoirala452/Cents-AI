@@ -247,7 +247,9 @@ export const api = {
   auditEvents: (query = "") => apiFetch<AuditPage>(`/audit-events${query ? `?${query}` : ""}`),
   exportAudit: () => apiFetch<string>("/audit-events/export.csv"),
   resetDemo: () => apiFetch("/admin/reset-demo", json("POST")),
-  health: () => apiFetch<{ status: string; paypalMode?: "sandbox" | "fake"; paypalEnvironment?: "sandbox" | "live"; copilotEngine?: "claude" | "rules" }>("/health", {}, false),
+  health: () => apiFetch<{ status: string; paypalMode?: "sandbox" | "fake"; paypalEnvironment?: "sandbox" | "live"; copilotEngine?: "llm" | "rules" }>("/health", {}, false),
   askCopilot: (question: string, history: Array<{ role: "user" | "assistant"; text: string }>) =>
-    apiFetch<{ answer: CopilotAnswer; engine: "claude" | "rules" }>("/copilot/ask", json("POST", { question, history })),
+    apiFetch<{ answer: CopilotAnswer; engine: "llm" | "rules"; proposals: Array<{ id: string; title: string; status: string }> }>("/copilot/ask", json("POST", { question, history })),
+  copilotDailyCheck: () =>
+    apiFetch<{ answer: CopilotAnswer; engine: "llm" | "rules"; proposals: Array<{ id: string; title: string; status: string }> }>("/copilot/daily-check", json("POST")),
 }

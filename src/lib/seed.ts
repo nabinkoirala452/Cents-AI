@@ -252,7 +252,7 @@ export function createSeed(): State {
   const approvals: Approval[] = [
     {
       id: "AP-3104", kind: "send_reminder", title: "Send payment reminder · INV-1042", recipient: "Acme Technologies",
-      amount: 6830, currency: "USD", refId: "INV-1042", preparedBy: "CentsAI agent",
+      amount: 6830, currency: "USD", refId: "INV-1042", preparedBy: "CentsAI agent", preparedByAgent: true,
       requestedAt: minutesAgo(12), status: "Pending", idempotencyKey: "rem-INV-1042-001",
       steps: ["Send a PayPal reminder for INV2-A9LX-4RTE-6QPC-2VNB", "Log the reminder on the invoice timeline", "Keep the receipt marked uncertain in the forecast"],
       draft: "Hi Acme Technologies team,\n\nA quick reminder that invoice INV-1042 for $6,830 (Project Orion · build milestone 2) was due 5 days ago. You can pay securely through the PayPal link on the invoice.\n\nIf payment is already on its way, please ignore this note — and thank you!\n\nBest regards,\nAlex Kumar\nMeridian Digital Studio",

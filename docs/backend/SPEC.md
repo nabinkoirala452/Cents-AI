@@ -2,7 +2,7 @@
 
 This is the authoritative spec for the backend. It condenses the "CentsAI Backend Blueprint" for the current phase.
 **Currency (decided 2026-10-17):** each workspace has ONE currency, default **USD**. All amounts (ledger, invoices, payroll, approvals, thresholds) are in that currency — there is no FX conversion. The demo agency is a small US-based agency billing in USD, so every invoice can be collected through PayPal.
-**LLM layer (added 2026-10-18):** the copilot uses Claude tool use on the server over the shared read-only tools in `src/lib/copilot.ts` (see `server/README.md` → Copilot). AI reminder drafting and an AI briefing narrative are still out of scope; template reminders (`src/lib/drafts.ts`) remain.
+**LLM layer (added 2026-10-18):** the copilot is an LLM agent on the server (Groq free tier via an OpenAI-compatible API) over the shared read-only tools in `src/lib/copilot.ts`, PayPal Agent Toolkit read tools, PayPal payment verification, and approval proposals that a person must approve (see `server/README.md` → Copilot agent). An AI briefing narrative is still out of scope.
 
 ---
 

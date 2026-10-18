@@ -240,6 +240,7 @@ function responseApproval(row: Approval) {
     currency: row.currency,
     refId: row.refId,
     preparedBy: row.preparedBy,
+    ...(row.preparedByAgent ? { preparedByAgent: true } : {}),
     requestedAt: row.requestedAt.toISOString(),
     status: row.status,
     idempotencyKey: row.idempotencyKey,
@@ -263,10 +264,13 @@ export async function listApprovals(ctx: RequestContext, status?: ApprovalStatus
 
 export async function createApproval(
   ctx: RequestContext,
-  input: { kind: ApprovalKind; refId: string; draft?: string; approveNow?: boolean },
+  input: { kind: ApprovalKind; refId: string; draft?: string; approveNow?: boolean; agent?: boolean },
   logger?: FastifyBaseLogger,
 ) {
   requireEdit(ctx.role)
+  if (input.agent && input.approveNow) {
+    throw new HttpError(403, "forbidden_role", "The copilot agent can only prepare approvals; a person must approve them.", "Forbidden")
+  }
   if (input.approveNow && ctx.role !== "Owner") {
     throw new HttpError(403, "forbidden_role", "Only workspace owners can auto-approve requests.", "Forbidden")
   }
@@ -306,9 +310,9 @@ export async function createApproval(
         amount: proposal.amount,
         currency: proposal.currency,
         refId: input.refId,
-        preparedBy: ctx.userName,
+        preparedBy: input.agent ? `CentsAI agent (for ${ctx.userName})` : ctx.userName,
         preparedByUserId: ctx.userId,
-        preparedByAgent: false,
+        preparedByAgent: Boolean(input.agent),
         requestedAt: new Date(),
         status: input.approveNow ? "Submitted" : "Pending",
         decidedBy: input.approveNow ? ctx.userName : null,
@@ -325,6 +329,7 @@ export async function createApproval(
       },
     })
     await audit(ctx, {
+      ...(input.agent ? { actor: `CentsAI agent (for ${ctx.userName})` } : {}),
       action: "Approval requested",
       detail: `${row.title} · ${row.amount.toString()} ${row.currency}`,
       ref: row.id,

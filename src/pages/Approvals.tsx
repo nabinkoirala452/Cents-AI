@@ -92,7 +92,7 @@ export default function ApprovalsPage() {
                   <div>
                     <strong>{a.title}</strong>
                     <small>
-                      {a.recipient} · {a.preparedBy === "CentsAI agent" ? <span className="agent-chip"><Bot size={11} /> CentsAI agent</span> : `by ${a.preparedBy}`} · {fmtStamp(a.requestedAt)}
+                      {a.recipient} · {a.preparedByAgent || a.preparedBy === "CentsAI agent" ? <span className="agent-chip"><Bot size={11} /> {a.preparedBy}</span> : `by ${a.preparedBy}`} · {fmtStamp(a.requestedAt)}
                     </small>
                     {a.status === "Stale" && <small>Records changed after this was requested — request again</small>}
                     {a.result && <small className="approval-result">{a.result}</small>}
@@ -154,7 +154,7 @@ function ReviewModal({ approval: a, close }: { approval: Approval; close: () => 
   const { state, mode, paypalEnvironment, approve, reject, confirmContractorPayment, toast, actor, signedInName } = store
   const s = state.settings
   const permissionAllowed = permissions(s).approve(a.amount)
-  const isSelfPrepared = s.role !== "Owner" && (a.preparedBy === actor || (mode === "hosted" && a.preparedBy === signedInName))
+  const isSelfPrepared = s.role !== "Owner" && (a.preparedBy === actor || (mode === "hosted" && (a.preparedBy === signedInName || (a.preparedByAgent === true && a.preparedBy === `CentsAI agent (for ${signedInName})`))))
   const allowed = permissionAllowed && !isSelfPrepared
   const [reason, setReason] = useState("")
   const [reference, setReference] = useState("")

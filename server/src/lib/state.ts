@@ -221,6 +221,7 @@ export async function loadState(workspaceId: string, role: Role): Promise<State>
         currency: approval.currency,
         refId: approval.refId,
         preparedBy: approval.preparedBy,
+        ...(approval.preparedByAgent ? { preparedByAgent: true } : {}),
         requestedAt: approval.requestedAt.toISOString(),
         status: approval.status,
         idempotencyKey: approval.idempotencyKey,

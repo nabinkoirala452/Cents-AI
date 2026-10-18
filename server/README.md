@@ -154,23 +154,41 @@ one-dollar USD test invoice, then prints PayPal's status and payer URL when
 PayPal provides one. If the API omits the payer-view link, the script reports
 `(not provided)` rather than fabricating a URL.
 
-## Copilot (Claude)
+## Copilot agent (Groq + PayPal Agent Toolkit)
 
-`POST /api/v1/copilot/ask` with `{ "question": "...", "history": [{ "role": "user" | "assistant", "text": "..." }] }`
-returns `{ answer, engine }`, where `answer` has the same shape the frontend copilot renders. Any workspace member,
-including a Viewer, may ask; it is limited to 20 requests per minute.
+The copilot is an LLM agent. By default it uses **Groq's free tier** through its OpenAI-compatible API; any
+OpenAI-compatible provider works by changing `LLM_BASE_URL` and `LLM_MODEL`. Get a free key at
+https://console.groq.com/keys and put it in `server/.env` as `LLM_API_KEY` (server only, never a `VITE_*` variable).
 
-- Claude (`ANTHROPIC_MODEL`, default `claude-opus-5-5`) picks which finance tools to call from `src/lib/copilot.ts`
-  and writes the headline and paragraphs. The tools are read-only and run the shared finance engine on `loadState()`,
-  so figures, tables, records, assumptions and actions all come from the engine, not the model.
-- Every currency amount and percentage in Claude's wording is checked against the tool output. Amounts that don't match
-  are listed in `answer.grounding.unverified` and shown to the user as "verify before relying on it".
-- Record text (client names, notes, descriptions) is passed as data. The model has no write tools, so prompt injection
-  cannot send, pay, approve or edit anything. Actions such as "Prepare reminders" are buttons the user clicks, and they
-  then go through the normal approval workflow.
-- Each answer writes a `Copilot answered` audit event with the engine, tools used, token counts and any unverified figures.
-- With `COPILOT_MODE=rules` or no `ANTHROPIC_API_KEY`, the deterministic keyword router answers instead. It also answers,
-  with a note, if Claude declines, is rate limited or can't be reached. `/api/v1/health` reports `copilotEngine`.
+Endpoints:
+- `POST /api/v1/copilot/ask` `{ "question": "...", "history": [{ "role": "user" | "assistant", "text": "..." }] }` →
+  `{ answer, engine, proposals }`. Any member may ask (20/min).
+- `POST /api/v1/copilot/daily-check` (Owner / Finance Manager, 5/min): the agent reviews cash, receivables and obligations,
+  checks PayPal status for sent PayPal invoices that are overdue or due soon, and prepares reminders for invoices still overdue.
 
-Environment: `ANTHROPIC_API_KEY` (server only, never a `VITE_*` variable), `ANTHROPIC_MODEL`,
-`COPILOT_EFFORT` (`low`–`max`, default `medium`), `COPILOT_MODE` (`claude` | `rules`).
+Tools the agent can call:
+- **Finance tools** (`src/lib/copilot.ts`): read-only; they run the deterministic engine on `loadState()`.
+- **PayPal Agent Toolkit** (`@paypal/agent-toolkit/openai`), **read actions only**: `list_invoices`, `get_invoice`,
+  `search_invoicing`, `list_transactions`, `get_merchant_insights`, `list_disputes` against the PayPal Sandbox. The toolkit's
+  write tools (send, remind, cancel, refund, pay) are not enabled, because they would bypass approvals. Set
+  `COPILOT_PAYPAL_TOOLS=false` to turn this off; it's also off when `PAYPAL_MODE=fake`.
+- **Agent actions**: `propose_payment_reminder` (with message text the agent writes) and `propose_paypal_invoice_send` call
+  the normal approval service with `preparedByAgent = true`. They only create a **Pending** approval, never use
+  `approveNow`, and are not offered to Viewers. Maker-checker still applies: a Finance Manager can't approve what the agent
+  prepared on their behalf. `check_paypal_payment` runs the same GET + reconcile as "Verify payment status", so a payment is
+  recorded only when PayPal confirms it.
+
+Safeguards:
+- Figures, tables, records and assumptions in the answer come from tool output. Every `$` amount and `%` in the model's
+  wording is checked against tool output, the workspace context and the user's words; mismatches are listed in
+  `answer.grounding.unverified` and shown as "verify before relying on it".
+- Record text and PayPal data are passed as data. A prompt-injected instruction can at most create a Pending approval for an
+  existing invoice, built from DB records, which a person must still approve.
+- Each run writes a `Copilot answered` or `Agent daily check` audit event (model, tools, prepared approval ids, token counts,
+  unverified figures).
+- With `COPILOT_MODE=rules` or no `LLM_API_KEY`, the deterministic router answers and the daily check uses template reminder
+  text. It also answers, with a note, if the provider rate-limits, rejects the key or can't be reached.
+  `/api/v1/health` reports `copilotEngine`.
+
+Environment: `LLM_API_KEY`, `LLM_BASE_URL` (default `https://api.groq.com/openai/v1`), `LLM_MODEL`
+(default `openai/gpt-oss-120b`), `COPILOT_MODE` (`llm` | `rules`), `COPILOT_PAYPAL_TOOLS` (default `true`).

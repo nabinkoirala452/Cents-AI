@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { AlertTriangle, ArrowRight, Check, ChevronDown, Database, Eraser, Send, ShieldCheck, Sparkles, Wrench } from "lucide-react"
+import { AlertTriangle, ArrowRight, Bot, Check, ChevronDown, Database, Eraser, Send, ShieldCheck, Sparkles, Wrench } from "lucide-react"
 import { Badge, Button, Card, CardHeader, Input, Title } from "../components/ui"
 import { api, hostedMode } from "../lib/api"
 import { answerQuestion, SUGGESTED_QUESTIONS, type CopilotAction, type CopilotAnswer } from "../lib/copilot"
@@ -10,7 +10,7 @@ import { ROLE_TIERS, useStore } from "../lib/store"
 import type { ChatMessage } from "../lib/types"
 
 export default function CopilotPage() {
-  const { state, today, update, prepareReminder, toast, can, copilotEngine } = useStore()
+  const { state, today, update, prepareReminder, toast, can, copilotEngine, refresh } = useStore()
   const [message, setMessage] = useState("")
   const [thinking, setThinking] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -29,16 +29,19 @@ export default function CopilotPage() {
     setMessage("")
     setThinking(q)
     if (hostedMode) {
-      // Server-side: Claude picks the finance tools; numbers come from the engine.
+      // Server-side: the LLM agent picks the tools; numbers come from the engine.
       const history = stateRef.current.chat.slice(-8).map((m) => ({
         role: m.role,
         text: m.role === "assistant" && m.answer ? [m.answer.headline, ...m.answer.paragraphs].join("\n") : m.text,
       }))
       api.askCopilot(q, history)
-        .then(({ answer }) =>
-          update((d) => {
+        .then(async ({ answer, proposals }) => {
+          await update((d) => {
             d.chat.push({ id: `m-${Date.now()}-a`, role: "assistant", text: answer.headline, answer })
-          }))
+          })
+          // The agent may have prepared approvals or recorded a verified PayPal payment.
+          if (proposals.length || answer.trace.some((t) => t.tool === "paypal.verify_payment")) await refresh().catch(() => undefined)
+        })
         .catch((cause: unknown) =>
           update((d) => {
             d.chat.push({ id: `m-${Date.now()}-e`, role: "assistant", text: `I couldn't answer that: ${cause instanceof Error ? cause.message : "the server did not respond"}.` })
@@ -53,6 +56,26 @@ export default function CopilotPage() {
       })
       setThinking(null)
     }, 900)
+  }
+
+  const runDailyCheck = () => {
+    if (thinking) return
+    setThinking("daily check")
+    void update((d) => {
+      d.chat.push({ id: `m-${Date.now()}`, role: "user", text: "Run today's finance check" })
+    })
+    api.copilotDailyCheck()
+      .then(async ({ answer }) => {
+        await update((d) => {
+          d.chat.push({ id: `m-${Date.now()}-a`, role: "assistant", text: answer.headline, answer })
+        })
+        await refresh().catch(() => undefined)
+      })
+      .catch((cause: unknown) =>
+        update((d) => {
+          d.chat.push({ id: `m-${Date.now()}-e`, role: "assistant", text: `The daily check failed: ${cause instanceof Error ? cause.message : "the server did not respond"}.` })
+        }))
+      .finally(() => setThinking(null))
   }
 
   useEffect(() => {
@@ -109,10 +132,15 @@ export default function CopilotPage() {
           <Badge tone="green">
             <ShieldCheck size={12} /> Grounded in workspace records
           </Badge>
-          {hostedMode && copilotEngine === "claude" && (
+          {hostedMode && copilotEngine === "llm" && (
             <Badge tone="blue">
-              <Sparkles size={12} /> Claude
+              <Sparkles size={12} /> AI agent · Groq
             </Badge>
+          )}
+          {hostedMode && can.prepare && (
+            <Button variant="secondary" icon={Bot} onClick={runDailyCheck} disabled={!!thinking}>
+              Run daily check
+            </Button>
           )}
           {state.chat.length > 0 && (
             <Button variant="ghost" icon={Eraser} onClick={() => update((d) => { d.chat = [] })}>
@@ -207,9 +235,9 @@ export default function CopilotPage() {
             <ShieldCheck size={15} />
             <span>
               {!hostedMode
-                ? "Demo mode: questions are routed to deterministic finance tools by keyword rules in your browser. In hosted mode Claude chooses the same tools on the server."
-                : copilotEngine === "claude"
-                  ? "Claude runs on the server and chooses which read-only finance tools to call. Every figure and table comes from the finance engine; amounts in Claude's wording are checked against tool output, and it cannot send, pay or approve anything."
+                ? "Demo mode: questions are routed to deterministic finance tools by keyword rules in your browser. In hosted mode an LLM agent (Groq) chooses the same tools on the server, reads live PayPal data and prepares approvals."
+                : copilotEngine === "llm"
+                  ? "An LLM agent (Groq) runs on the server. It calls the finance engine, PayPal Agent Toolkit read tools and PayPal payment verification, and can prepare reminders or PayPal sends as Pending approvals. It cannot approve, send or pay: an authorised person approves every action. Amounts in its wording are checked against tool output."
                   : "The server has no LLM configured, so questions are routed to the finance tools by keyword rules. Numbers come from the same engine either way."}
             </span>
           </div>
@@ -310,7 +338,7 @@ function AssistantMessage({ answer, text, onAction }: { answer?: CopilotAnswer; 
         )}
         {answer.engine && (
           <small className="section-note">
-            {answer.engine === "claude" ? "Written by Claude from tool results" : "Rule-based answer"}
+            {answer.engine === "llm" ? `Written by ${answer.model ?? "the LLM agent"} from tool results` : "Rule-based answer"}
             {answer.grounding?.checked && (answer.grounding.unverified.length ? " · some figures not found in tool output" : " · every amount matches tool output")}
           </small>
         )}

@@ -33,10 +33,11 @@ const environmentSchema = z.object({
   PAYPAL_CLIENT_SECRET: optionalValue,
   PAYPAL_WEBHOOK_ID: optionalValue,
   PAYPAL_SANDBOX_PAYER_EMAIL: optionalValue,
-  COPILOT_MODE: z.enum(["claude", "rules"]).default("claude"),
-  ANTHROPIC_API_KEY: optionalValue,
-  ANTHROPIC_MODEL: z.string().min(1).default("claude-opus-5-5"),
-  COPILOT_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
+  COPILOT_MODE: z.enum(["llm", "rules"]).default("llm"),
+  LLM_API_KEY: optionalValue,
+  LLM_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
+  LLM_MODEL: z.string().min(1).default("openai/gpt-oss-120b"),
+  COPILOT_PAYPAL_TOOLS: booleanFromString.default(true),
 })
 
 const parsed = environmentSchema.safeParse(process.env)
@@ -73,9 +74,11 @@ export const config = {
   paypalClientSecret: parsed.data.PAYPAL_CLIENT_SECRET,
   paypalWebhookId: parsed.data.PAYPAL_WEBHOOK_ID,
   paypalSandboxPayerEmail: parsed.data.PAYPAL_SANDBOX_PAYER_EMAIL,
-  // Claude writes copilot wording only when a key is configured; otherwise the rule-based router answers.
-  copilotEngine: parsed.data.COPILOT_MODE === "claude" && parsed.data.ANTHROPIC_API_KEY ? "claude" as const : "rules" as const,
-  anthropicApiKey: parsed.data.ANTHROPIC_API_KEY,
-  anthropicModel: parsed.data.ANTHROPIC_MODEL,
-  copilotEffort: parsed.data.COPILOT_EFFORT,
+  // The LLM (Groq by default, any OpenAI-compatible API) drives the copilot only when a key is set;
+  // otherwise the rule-based router answers.
+  copilotEngine: parsed.data.COPILOT_MODE === "llm" && parsed.data.LLM_API_KEY ? "llm" as const : "rules" as const,
+  llmApiKey: parsed.data.LLM_API_KEY,
+  llmBaseUrl: parsed.data.LLM_BASE_URL,
+  llmModel: parsed.data.LLM_MODEL,
+  copilotPayPalTools: parsed.data.COPILOT_PAYPAL_TOOLS,
 } as const

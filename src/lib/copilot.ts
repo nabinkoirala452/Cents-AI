@@ -8,8 +8,8 @@
  * Two routers share these tools and this answer shape:
  * - `answerQuestion()` — rule-based intent routing, runs in the browser (demo mode)
  *   and as the server fallback when no LLM is configured.
- * - the server copilot module — Claude chooses tools via tool use, then writes the
- *   wording; every figure, table and record still comes from these tools.
+ * - the server copilot agent — an LLM (Groq by default) chooses tools via tool calling,
+ *   then writes the wording; every figure, table and record still comes from these tools.
  */
 import { dayInMonth, fmtDay, parseISO } from "./dates"
 import {
@@ -48,7 +48,9 @@ export type CopilotAnswer = {
   trace: TraceStep[]
   actions: CopilotAction[]
   /** Who wrote the wording. Absent on answers stored before the LLM layer existed. */
-  engine?: "rules" | "claude"
+  engine?: "rules" | "llm"
+  /** Model id when an LLM wrote the wording. */
+  model?: string
   /** Server check that every amount and percentage in the wording appears in tool output. */
   grounding?: { checked: boolean; unverified: string[] }
 }

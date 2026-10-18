@@ -75,7 +75,7 @@ type Store = {
   signedInName: string
   paypalMode: "sandbox" | "fake"
   paypalEnvironment: "sandbox" | "live"
-  copilotEngine: "claude" | "rules"
+  copilotEngine: "llm" | "rules"
   refresh: () => Promise<void>
   login: (email: string, password: string) => Promise<void>
   signOut: () => void
@@ -164,7 +164,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const healthRequest = useRef<Promise<Awaited<ReturnType<typeof api.health>>> | null>(null)
   const [paypalMode, setPaypalMode] = useState<"sandbox" | "fake">("fake")
   const [paypalEnvironment, setPaypalEnvironment] = useState<"sandbox" | "live">("sandbox")
-  const [copilotEngine, setCopilotEngine] = useState<"claude" | "rules">("rules")
+  const [copilotEngine, setCopilotEngine] = useState<"llm" | "rules">("rules")
   const [toastMessage, setToastMessage] = useState("")
   const toastTimer = useRef<number | undefined>(undefined)
   const [pendingRequests, setPendingRequests] = useState(0)

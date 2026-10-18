@@ -8,7 +8,7 @@ Run `pnpm dev` (or `npm run dev`). Vite 8 requires Node 20.19+ or 22.12+.
 
 ## Backend
 
-The backend is being built in `server/` (Fastify + Prisma + PostgreSQL, real PayPal Sandbox). The authoritative spec is `docs/backend/SPEC.md`, the build prompts are in `docs/backend/PROMPTS.md`, and progress is logged in `docs/backend/PROGRESS.md`. The copilot LLM layer (Claude tool use over the finance tools) lives in `server/src/modules/copilot/`; see `server/README.md`.
+The backend is being built in `server/` (Fastify + Prisma + PostgreSQL, real PayPal Sandbox). The authoritative spec is `docs/backend/SPEC.md`, the build prompts are in `docs/backend/PROMPTS.md`, and progress is logged in `docs/backend/PROGRESS.md`. The copilot agent (Groq LLM via an OpenAI-compatible API, finance tools, PayPal Agent Toolkit read tools, approval proposals) lives in `server/src/modules/copilot/`; see `server/README.md`.
 
 ## Project Structure
 
@@ -20,7 +20,7 @@ This is the canonical project structure. Start with task-relevant files below. O
   - `types.ts` workspace data model · `seed.ts` demo data generated relative to today
   - `finance.ts` deterministic finance engine (cash, receivables, 3-scenario forecast, margins, loans, briefing) — every number in the UI comes from here
   - `store.tsx` React context + localStorage persistence, permission tiers, approval workflow and audit log
-  - `copilot.ts` read-only finance tools shared by the rule-based router (browser) and the Claude agent (server), plus the answer shape
+  - `copilot.ts` read-only finance tools shared by the rule-based router (browser) and the LLM agent (server), plus the answer shape
   - `paypal.ts` simulated PayPal Sandbox adapter (to be replaced by backend calls)
   - `router.ts`, `dates.ts`, `format.ts`, `csv.ts`, `drafts.ts` helpers
 - `src/components/` - `ui.tsx` primitives, `layout.tsx` sidebar/header/search/alerts, `charts.tsx`, `finance-ui.tsx`

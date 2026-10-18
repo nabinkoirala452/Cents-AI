@@ -156,6 +156,8 @@ export type Approval = {
   currency: Currency
   refId: string
   preparedBy: string
+  /** True when the copilot agent prepared it; a person still approves. */
+  preparedByAgent?: boolean
   requestedAt: string
   status: ApprovalStatus
   idempotencyKey: string
