@@ -206,8 +206,9 @@ async function reconcilePayPalStatus(
         ? { warning: "PayPal reports PAID but payment details could not be verified" }
         : {}),
     }
-  })
+  }, { timeout: 15000, maxWait: 10000 })
 }
+
 
 export async function reconcileInvoice(
   workspaceId: string,

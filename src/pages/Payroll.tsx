@@ -9,11 +9,12 @@ import { useStore } from "../lib/store"
 import type { ContractorBill, Employee } from "../lib/types"
 
 export default function PayrollPage() {
-  const { state, today, update, log, actor, toast, can, requestContractorPayment } = useStore()
+  const { state, today, removeEmployee: deleteEmployeeFromStore, log, actor, toast, can, requestContractorPayment } = useStore()
   const [tab, setTab] = useState<"Employees" | "Contractors">("Employees")
   const [window_, setWindow] = useState<7 | 14 | 30>(14)
   const [editing, setEditing] = useState<Employee | "new" | null>(null)
   const [addingBill, setAddingBill] = useState(false)
+  const [payingBillId, setPayingBillId] = useState<string | null>(null)
   const [hire, setHire] = useState({ salary: 5600, start: dayInMonth(today, 1, 1), equipment: 8130, other: 630 })
 
   const payroll = monthlyPayroll(state)
@@ -41,11 +42,10 @@ export default function PayrollPage() {
     return { before, after }
   }, [state, today, hire])
 
-  const removeEmployee = (e: Employee) => {
+  const removeEmployee = async (e: Employee) => {
     if (!window.confirm(`Remove ${e.name} from payroll planning? Past payroll transactions stay in the ledger.`)) return
-    update((d) => {
-      d.employees = d.employees.filter((x) => x.id !== e.id)
-    })
+    const res = await deleteEmployeeFromStore(e.id)
+    if (!res.ok) return toast(res.message)
     log({ actor, action: "Employee removed", detail: `${e.name} (${money(e.monthlySalary)}/month) removed from future payroll`, outcome: "warning" })
     toast(`${e.name} removed from future payroll`)
   }
@@ -110,7 +110,7 @@ export default function PayrollPage() {
                       <td>
                         <div className="row-actions">
                           <Button variant="ghost" icon={Pencil} aria-label={`Edit ${e.name}`} disabled={!can.edit} onClick={() => setEditing(e)} />
-                          <Button variant="ghost" icon={Trash2} aria-label={`Remove ${e.name}`} disabled={!can.edit} onClick={() => removeEmployee(e)} />
+                          <Button variant="ghost" icon={Trash2} aria-label={`Remove ${e.name}`} disabled={!can.edit} onClick={() => void removeEmployee(e)} />
                         </div>
                       </td>
                     </tr>
@@ -152,8 +152,22 @@ export default function PayrollPage() {
                                 {approval.id} <ArrowRight size={13} />
                               </Button>
                             ) : (
-                              <Button variant="ghost" disabled={!can.prepare} onClick={() => toast(requestContractorPayment(b.id).message)}>
-                                Request payment
+                              <Button
+                                variant="ghost"
+                                disabled={!can.prepare || payingBillId === b.id}
+                                loading={payingBillId === b.id}
+                                onClick={async () => {
+                                  if (payingBillId) return
+                                  setPayingBillId(b.id)
+                                  try {
+                                    const res = await requestContractorPayment(b.id, state.settings.role === "Owner")
+                                    toast(res.message)
+                                  } finally {
+                                    setPayingBillId(null)
+                                  }
+                                }}
+                              >
+                                {state.settings.role === "Owner" ? "Pay contractor" : "Request approval from Owner"}
                               </Button>
                             ))}
                         </td>
@@ -241,7 +255,7 @@ export default function PayrollPage() {
 }
 
 function EmployeeForm({ record, close }: { record?: Employee; close: () => void }) {
-  const { state, today, update, log, actor, toast } = useStore()
+  const { state, today, addEmployee, patchEmployee, log, actor, toast } = useStore()
   const [d, setD] = useState({
     name: record?.name ?? "", role: record?.role ?? "", monthlySalary: record ? String(record.monthlySalary) : "",
     payDay: String(record?.payDay ?? state.employees[0]?.payDay ?? 28), startDate: record?.startDate ?? today, status: record?.status ?? ("Active" as Employee["status"]),
@@ -252,15 +266,23 @@ function EmployeeForm({ record, close }: { record?: Employee; close: () => void 
       title={record ? `Edit ${record.name}` : "Add employee"}
       submitLabel={record ? "Save changes" : "Add to payroll"}
       onClose={close}
-      onSubmit={() => {
+      onSubmit={async () => {
         const salary = Number(d.monthlySalary)
         const payDay = Math.min(28, Math.max(1, Number(d.payDay)))
-        if (!d.name.trim() || !d.role.trim() || !(salary > 0)) return toast("Enter a name, role and positive salary")
+        if (!d.name.trim() || !d.role.trim() || !(salary > 0)) {
+          const msg = "Enter a name, role and positive salary"
+          toast(msg)
+          throw new Error(msg)
+        }
         const status: Employee["status"] = d.startDate > today ? "Planned" : d.status
-        update((s) => {
-          if (record) Object.assign(s.employees.find((e) => e.id === record.id)!, { name: d.name.trim(), role: d.role.trim(), monthlySalary: salary, payDay, startDate: d.startDate, status })
-          else s.employees.push({ id: `e-${Date.now().toString(36)}`, name: d.name.trim(), role: d.role.trim(), monthlySalary: salary, payDay, startDate: d.startDate, status })
-        })
+        const payload = { name: d.name.trim(), role: d.role.trim(), monthlySalary: salary, payDay, startDate: d.startDate, status }
+        const res = record
+          ? await patchEmployee(record.id, payload)
+          : await addEmployee(payload)
+        if (!res.ok) {
+          toast(res.message)
+          throw new Error(res.message)
+        }
         log({ actor, action: record ? "Employee updated" : "Employee added", detail: `${d.name} · ${money(salary)}/month from ${fmtDay(d.startDate)}`, outcome: "info" })
         toast(record ? "Changes saved — forecast updated" : `${d.name} added — forecast now includes the salary`)
         close()
@@ -288,7 +310,7 @@ function EmployeeForm({ record, close }: { record?: Employee; close: () => void 
 }
 
 function BillForm({ close }: { close: () => void }) {
-  const { state, today, update, log, actor, toast } = useStore()
+  const { state, today, addContractorBill, log, actor, toast } = useStore()
   const [d, setD] = useState({ vendor: "", projectId: state.projects[0]?.id ?? "", reference: "", amount: "", dueDate: addDays(today, 14) })
   return (
     <FormModal
@@ -296,14 +318,26 @@ function BillForm({ close }: { close: () => void }) {
       title="Add contractor bill"
       submitLabel="Add obligation"
       onClose={close}
-      onSubmit={() => {
+      onSubmit={async () => {
         const amount = Number(d.amount)
-        if (!d.vendor.trim() || !(amount > 0)) return toast("Enter a contractor and positive amount")
-        const bill: ContractorBill = { id: `CB-${Date.now().toString(36).toUpperCase()}`, vendor: d.vendor.trim(), projectId: d.projectId || undefined, reference: d.reference || "—", amount, dueDate: d.dueDate, status: "Scheduled" }
-        update((s) => {
-          s.contractorBills.push(bill)
+        if (!d.vendor.trim() || !(amount > 0)) {
+          const msg = "Enter a contractor and positive amount"
+          toast(msg)
+          throw new Error(msg)
+        }
+        const res = await addContractorBill({
+          vendor: d.vendor.trim(),
+          projectId: d.projectId || undefined,
+          reference: d.reference || "—",
+          amount,
+          dueDate: d.dueDate,
+          status: "Scheduled",
         })
-        log({ actor, action: "Contractor bill added", detail: `${bill.vendor} ${money(amount)} due ${fmtDay(d.dueDate)}`, ref: bill.id, outcome: "info" })
+        if (!res.ok) {
+          toast(res.message)
+          throw new Error(res.message)
+        }
+        log({ actor, action: "Contractor bill added", detail: `${d.vendor.trim()} ${money(amount)} due ${fmtDay(d.dueDate)}`, outcome: "info" })
         toast("Bill added — included in forecast and project costs")
         close()
       }}

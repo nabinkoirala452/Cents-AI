@@ -15,6 +15,7 @@ export function InvoiceRows({ rows, state, today, onSelect, showPriority }: {
   onSelect: (inv: Invoice) => void
   showPriority?: boolean
 }) {
+  const { highlightedId } = useStore()
   return (
     <div className="table-scroll">
       <table>
@@ -37,7 +38,7 @@ export function InvoiceRows({ rows, state, today, onSelect, showPriority }: {
             const due =
               st === "Paid" ? `Paid ${inv.paidDate ? fmtDay(inv.paidDate) : ""}` : st === "Draft" ? "Not issued" : relativeDue(inv.dueDate, today)
             return (
-              <tr key={inv.id} className="clickable" tabIndex={0} onClick={() => onSelect(inv)} onKeyDown={(e) => e.key === "Enter" && onSelect(inv)}>
+              <tr key={inv.id} className={`clickable ${inv.id === highlightedId ? "row-highlight" : ""}`} tabIndex={0} onClick={() => onSelect(inv)} onKeyDown={(e) => e.key === "Enter" && onSelect(inv)}>
                 <td>
                   <strong>{client?.name}</strong>
                   <small className="row-id">{inv.channel === "PayPal" ? "PayPal" : "Bank transfer"} · {inv.currency}</small>
@@ -114,12 +115,12 @@ export function RiskAlert({ fc, threshold, link = true }: { fc: Forecast; thresh
 
 /** Priority actions with explainable evidence. Used by the dashboard and the briefing page. */
 export function PriorityList({ items, compact }: { items: Priority[]; compact?: boolean }) {
-  const { state, today, update, prepareReminder, toast } = useStore()
+  const { state, today, dismissInsight, prepareReminder, toast } = useStore()
   const [expanded, setExpanded] = useState<string | null>(compact ? null : items[0]?.id ?? null)
 
-  const draftReminders = () => {
+  const draftReminders = async () => {
     const overdue = state.invoices.filter((i) => i.status === "Sent" && i.dueDate < today)
-    const results = overdue.map((i) => prepareReminder(i.id, { preparedBy: "CentsAI agent" }))
+    const results = await Promise.all(overdue.map((i) => prepareReminder(i.id, { preparedBy: "CentsAI agent" })))
     const ok = results.filter((r) => r.ok).length
     toast(ok ? `${ok} reminder draft${ok > 1 ? "s" : ""} prepared — review them in Approvals` : results[0]?.message ?? "No overdue invoices")
   }
@@ -166,11 +167,11 @@ export function PriorityList({ items, compact }: { items: Priority[]; compact?: 
               {!compact && (
                 <Button
                   variant="ghost"
-                  onClick={() =>
-                    update((d) => {
-                      d.dismissedInsights.push(item.id)
-                    })
-                  }
+                  onClick={async () => {
+                    const res = await dismissInsight(item.id)
+                    if (!res.ok) return toast(res.message)
+                    toast("Insight dismissed")
+                  }}
                 >
                   Dismiss
                 </Button>

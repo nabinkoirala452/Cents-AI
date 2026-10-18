@@ -28,6 +28,47 @@ export const NOTIFICATION_KEYS = [
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 
+export function emptyState(): State {
+  return {
+    version: STATE_VERSION,
+    seededOn: todayISO(),
+    settings: {
+      agencyName: "",
+      agencyType: "",
+      teamSize: "",
+      location: "",
+      website: "",
+      ownerName: "",
+      ownerEmail: "",
+      currency: "USD",
+      safetyThreshold: 0,
+      defaultHorizon: 30,
+      planningScenario: "expected",
+      managerApprovalLimit: 0,
+      role: "Viewer",
+      openingBalance: 0,
+      openingDate: todayISO(),
+      notifications: {},
+      team: [],
+      readiness: [],
+    },
+    clients: [],
+    projects: [],
+    invoices: [],
+    transactions: [],
+    employees: [],
+    contractorBills: [],
+    recurring: [],
+    loans: [],
+    offers: [],
+    approvals: [],
+    audit: [],
+    scenarios: [],
+    dismissedInsights: [],
+    chat: [],
+  }
+}
+
 /** Demonstration workspace. Every date is relative to today so the demo never goes stale. */
 export function createSeed(): State {
   const T = todayISO()

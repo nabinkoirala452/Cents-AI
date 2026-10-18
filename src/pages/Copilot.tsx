@@ -49,11 +49,11 @@ export default function CopilotPage() {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
   }, [state.chat.length, thinking])
 
-  const runAction = (action: CopilotAction) => {
+  const runAction = async (action: CopilotAction) => {
     if (action.kind === "navigate") return go(action.to)
     if (!can.prepare) return toast("Your role can view answers but not prepare actions.")
     const overdue = state.invoices.filter((i) => i.status === "Sent" && i.dueDate < today)
-    const results = overdue.map((i) => ({ id: i.id, ...prepareReminder(i.id, { preparedBy: "CentsAI agent" }) }))
+    const results = await Promise.all(overdue.map(async (i) => ({ id: i.id, ...await prepareReminder(i.id, { preparedBy: "CentsAI agent" }) })))
     const ok = results.filter((r) => r.ok)
     update((d) => {
       d.chat.push({

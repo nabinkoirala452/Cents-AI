@@ -767,4 +767,104 @@ describe("approval and payment money path", () => {
       where: { providerEventId: eventId },
     })).toMatchObject({ signatureVerified: true, processedAt: expect.any(Date), error: null })
   })
+
+  it("executes Owner approveNow immediately, ending in Verified with exactly one audit trail", async () => {
+    const invoice = await createInvoice(180)
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: headers(ownerToken),
+      payload: {
+        kind: "paypal_send_invoice",
+        refId: invoice.id,
+        approveNow: true,
+      },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({
+      status: "Verified",
+      preparedBy: "Money Owner",
+      decidedBy: "Money Owner",
+    })
+
+    const auditEvents = await prisma.auditEvent.findMany({
+      where: { workspaceId },
+      orderBy: { at: "asc" },
+    })
+    const requested = auditEvents.find((a) => a.action === "Approval requested" && a.ref === res.json().id)
+    const approved = auditEvents.find(
+      (a) => a.action === "Approved & submitted" && a.ref === res.json().id && a.detail.includes("auto-approved by Owner (self-requested)"),
+    )
+    const executed = auditEvents.find(
+      (a) => a.action === "Invoice created & sent" && a.ref === invoice.id && a.detail.includes(invoice.id),
+    )
+    expect(requested).toBeDefined()
+    expect(approved).toBeDefined()
+    expect(executed).toBeDefined()
+  })
+
+  it("refuses approveNow for non-Owners with 403 forbidden_role", async () => {
+    const invoice = await createInvoice(190)
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: headers(managerToken),
+      payload: {
+        kind: "paypal_send_invoice",
+        refId: invoice.id,
+        approveNow: true,
+      },
+    })
+    expect(res.statusCode).toBe(403)
+    expect(res.json()).toMatchObject({ code: "forbidden_role" })
+  })
+
+  it("prevents Finance Managers from approving requests they prepared themselves (maker-checker)", async () => {
+    const invoice = await createInvoice(220)
+    const propRes = await propose("paypal_send_invoice", invoice.id, managerToken)
+    expect(propRes.statusCode).toBe(200)
+    const approvalId = propRes.json().id
+
+    const selfApprove = await approve(approvalId, managerToken)
+    expect(selfApprove.statusCode).toBe(403)
+    expect(selfApprove.json()).toMatchObject({ code: "maker_checker_violation" })
+
+    const ownerApprove = await approve(approvalId, ownerToken)
+    expect(ownerApprove.statusCode).toBe(200)
+    expect(ownerApprove.json()).toMatchObject({ status: "Verified" })
+  })
+
+  it("does not call PayPal twice when replaying the same Idempotency-Key on approveNow", async () => {
+    const invoice = await createInvoice(240)
+    const callsBefore = gateway.calls.filter((c) => c.method === "sendInvoice").length
+    const replayKey = `idemp-approve-now-${suffix}`
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: { ...headers(ownerToken), "idempotency-key": replayKey },
+      payload: {
+        kind: "paypal_send_invoice",
+        refId: invoice.id,
+        approveNow: true,
+      },
+    })
+    expect(first.statusCode).toBe(200)
+    expect(gateway.calls.filter((c) => c.method === "sendInvoice").length).toBe(callsBefore + 1)
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: { ...headers(ownerToken), "idempotency-key": replayKey },
+      payload: {
+        kind: "paypal_send_invoice",
+        refId: invoice.id,
+        approveNow: true,
+      },
+    })
+    expect(second.statusCode).toBe(200)
+    expect(second.json().id).toBe(first.json().id)
+    expect(gateway.calls.filter((c) => c.method === "sendInvoice").length).toBe(callsBefore + 1)
+  })
 })
+

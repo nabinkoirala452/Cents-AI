@@ -18,7 +18,7 @@ const CHECKLIST = [
 ]
 
 export default function FinancingPage() {
-  const { state, today, update, log, actor, toast, can } = useStore()
+  const { state, today, update, log, actor, toast, can, mode, addOffer, removeOffer } = useStore()
   const s = state.settings
   const [purpose, setPurpose] = useState("Hiring or expansion")
   const [spend, setSpend] = useState(37500)
@@ -217,11 +217,10 @@ export default function FinancingPage() {
                       icon={Trash2}
                       aria-label={`Remove ${r.o.name}`}
                       disabled={!can.edit}
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation()
-                        update((d) => {
-                          d.offers = d.offers.filter((x) => x.id !== r.o.id)
-                        })
+                        const result = await removeOffer(r.o.id)
+                        if (!result.ok) toast(result.message)
                       }}
                     />
                   </td>
@@ -287,14 +286,15 @@ export default function FinancingPage() {
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={!can.edit}
-                  onChange={() =>
+                  disabled={!can.edit || mode === "hosted"}
+                  onChange={() => {
+                    if (mode === "hosted") return
                     update((d) => {
                       const list = [...CHECKLIST.map((_, i) => d.settings.readiness[i] ?? false)]
                       list[index] = !checked
                       d.settings.readiness = list
                     })
-                  }
+                  }}
                 />
                 <span>
                   <strong>{item}</strong>
@@ -304,16 +304,15 @@ export default function FinancingPage() {
             )
           })}
         </div>
+        {mode === "hosted" && <p className="section-note">Readiness checklist items are local planning notes and are unavailable in hosted mode.</p>}
       </Card>
       {adding && (
         <OfferForm
           close={() => setAdding(false)}
-          onAdd={(o) => {
-            update((d) => {
-              d.offers.push(o)
-            })
-            log({ actor, action: "Loan offer added", detail: `${o.name} · ${money(o.principal)} at ${o.rate}% for ${o.months} months`, outcome: "info" })
-            setSelectedOffer(o.id)
+          onAdd={async (o) => {
+            const result = await addOffer(o)
+            if (!result.ok) { toast(result.message); return }
+            await log({ actor, action: "Loan offer added", detail: `${o.name} · ${money(o.principal)} at ${o.rate}% for ${o.months} months`, outcome: "info" })
             toast("Offer added to the comparison")
           }}
         />
@@ -323,7 +322,7 @@ export default function FinancingPage() {
   )
 }
 
-function OfferForm({ close, onAdd }: { close: () => void; onAdd: (o: LoanOffer) => void }) {
+function OfferForm({ close, onAdd }: { close: () => void; onAdd: (o: LoanOffer) => Promise<void> }) {
   const { state, toast } = useStore()
   const [d, setD] = useState({ name: "", principal: "", rate: "", months: "24", fees: "0" })
   return (
@@ -332,11 +331,20 @@ function OfferForm({ close, onAdd }: { close: () => void; onAdd: (o: LoanOffer) 
       title="Add financing offer"
       submitLabel="Add offer"
       onClose={close}
-      onSubmit={() => {
+      onSubmit={async () => {
         const o: LoanOffer = { id: `OF-${Date.now().toString(36)}`, name: d.name.trim(), principal: Number(d.principal), rate: Number(d.rate), months: Number(d.months), fees: Number(d.fees) || 0 }
-        if (!o.name || !(o.principal > 0) || !(o.rate >= 0) || !(o.months > 0)) return toast("Enter a name, principal, rate and tenure")
-        onAdd(o)
-        close()
+        if (!o.name || !(o.principal > 0) || !(o.rate >= 0) || !(o.months > 0)) {
+          const msg = "Enter a name, principal, rate and tenure"
+          toast(msg)
+          throw new Error(msg)
+        }
+        try {
+          await onAdd(o)
+          close()
+        } catch (err) {
+          toast("The offer could not be saved.")
+          throw err
+        }
       }}
     >
       <div className="form-grid">

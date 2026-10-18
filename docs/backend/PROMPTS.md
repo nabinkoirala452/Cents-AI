@@ -274,18 +274,149 @@ Report: files changed, what you tested manually in both modes, anything not wire
 
 ---
 
-## Phase 6 — Hardening, docs, deploy, submission evidence
+## Phase 5 fixes — from review (do before Phase 6)
+
+```
+Phase 5 review fixes — hosted mode. Read docs/backend/PROGRESS.md, SPEC §11 and src/lib/store.tsx, src/App.tsx first. Demo mode (no VITE_API_URL) must stay exactly as before. Do not overwrite server/.env. Do not run db:seed or reset the shared demo workspace. Do not commit .tsupgrader/.
+
+1. CRITICAL — every hosted refresh unmounts the whole app. `Router` in src/App.tsx returns the "Loading your workspace…" screen whenever `store.loading` is true, and `refresh()` sets loading=true on every call (after every mutation and every log). Result: each save flashes a spinner, remounts AppShell, and closes open drawers/modals/forms. Fix: split `loading` into `initialLoading` (true only until the FIRST successful hydrate after login/page load) and a silent background refresh that never touches it. Full-screen loading shows only for initialLoading.
+
+2. CRITICAL — mutation errors take over the whole app. hostedMutation and `update` call `setError(text)`, and Router replaces the app with "Your workspace could not be loaded" whenever `store.error` is set. A 403 on approve, a 400 validation error, or a 409 would blank the UI (and `update` leaves it stuck there because it never refreshes). Fix: keep two separate things — `loadError` (hydrate/refresh failed → full-screen error + Retry, only while there is no usable state or the API is unreachable) and per-action errors, which are returned to the caller (`{ ok:false, message }` / thrown) and shown as a toast or inline message. Mutation errors must never set the full-screen error.
+
+3. HIGH — `update()` in hosted mode swallows failures. It diffs before/after state and fires many API calls (`persistHostedChanges`), catches everything, and RESOLVES — so pages show success toasts ("Scenario saved", "Loan added") even when the API rejected the change, and a mid-way failure leaves a partial write (non-atomic). Fix: replace the diff engine with explicit store methods for the mutations the UI actually performs, each calling exactly one endpoint, returning Result, and followed by a silent refresh(): updateSettings, updateWorkspace, saveAssumptions (safetyThreshold + invoice expectedDelayOverride), dismissInsight / restoreInsights, addClient/patchClient, addProject/assignHours, addEmployee/patchEmployee/removeEmployee, addContractorBill, addRecurringCost/patchRecurringCost/markRecurringReviewed, addLoan/patchLoan, addOffer/removeOffer, saveScenario/deleteScenario, confirmTransaction (Review → Recorded), importTransactions, patchInvoice/deleteInvoice. Update the pages to await them and show result.message on failure. `store.update` stays for demo mode and for local-only data (chat). If you keep any generic path in hosted mode, it must THROW on failure and on any state change it cannot persist, never silently resolve. Grep for every remaining `update((` in src/pages and src/components and list in PROGRESS.md which method replaced each.
+
+4. HIGH — 401 handling. If the JWT is expired/invalid, apiFetch throws and the user gets a permanent error screen whose Retry can never succeed. In apiFetch: on 401 for an authenticated call, clear the session, set authenticated=false, and send the user to the login page with the message "Your session expired. Sign in again." Do this through a small listener/event so api.ts stays free of React.
+
+5. MEDIUM — hosted login form is prefilled with demo values (alex@meridian.example / demopassword) because of `defaultValue`. In hosted mode the fields must be empty with neutral placeholders (no demo credentials in the bundle). Also show the sign-out control and the signed-in user's name + role (from the membership) in the sidebar/footer in hosted mode.
+
+6. MEDIUM — hosted `log()` is a fake: it calls `api.auditEvents("limit=1")` and then a full refresh just to look busy. The server writes audit events itself. In hosted mode make `log()` a no-op that resolves immediately, and remove the extra `await log(...)` refreshes. Audit lists load from the state refresh (or /audit-events) only. Nothing in the UI may imply the client wrote an audit row.
+
+7. MEDIUM — Approvals: `allowed = mode === "hosted" ? true : permissionAllowed` forces the Approve button on for Finance Managers above their limit and Viewers. Use the real `permissionAllowed` (settings.role + managerApprovalLimit come from the server state) in both modes and keep the server 403 as the authority; the over-limit note should say "Owner approval required". If the product wants to demonstrate the server denial, do it with a visible "Try anyway (server will refuse)" secondary action, not by silently enabling Approve.
+
+8. MEDIUM — Reset: in hosted mode, "Reset demo data" wipes the SHARED workspace for the whole team. Show it only to Owners, require typing RESET to confirm, and make the confirm text say it affects every teammate and the PayPal-linked invoices stay in the PayPal sandbox. Ensure the backend still refuses it unless the server's demo-reset flag is on (add a test if one does not exist).
+
+9. LOW — `useState(() => hostedMode ? createSeed() : load())` hydrates hosted mode with the fictional seed workspace, which can flash on screen and gets restored on sign-out. Use an empty State (add `emptyState()` to seed.ts or types) for hosted mode before the first hydrate and after sign-out, and render nothing from it while unauthenticated.
+
+10. LOW — Repo hygiene: `.tsupgrader/` at the repo root is untracked tool output. Delete it and add `.tsupgrader/` to .gitignore (the same lesson as Phase 4). `git status` must not list it.
+
+11. LOW — `loadState`/hosted refresh runs `api.workspaceState()` and `api.health()` together on every refresh; fetch health once at startup (paypalMode/paypalEnvironment don't change) and only workspaceState on refresh.
+
+12. Finish the hosted verification by UI, not by hand-made API calls. Start API on 8787 and the frontend with VITE_API_URL=http://localhost:8787 (add the frontend origin to the API's CORS setting in the local .env.example comment if needed). Through the browser: login as owner → create USD invoice → Request PayPal send → Approve → confirm the payer link appears and "Simulate client payment" does not → login as finance@ and approve a >$6,000 item (button disabled or server 403 shown as a toast, app stays usable) → add a transaction, add a client, change the safety threshold and confirm each persists after a hard reload → expire/clear the token and confirm you land on login with the expiry message → stop the API and confirm the Retry screen appears, restart it and Retry works. Then pay INV-1060 on the sandbox payer page with the sandbox personal account (ask me for the credentials, never write them down) and click Verify payment status → Paid + exactly one ledger entry + one payment-verified audit event, and clicking Verify again adds no second ledger entry.
+
+13. Add a few frontend tests if vitest is not set up, set it up minimally (devDependency only, no change to the app build): ApiError parsing of problem+json, Idempotency-Key present on POST and absent on GET, 401 clears the session, and the store's hostedMutation returns ok:false without setting the full-screen loadError.
+
+14. Run root `npx tsc --noEmit -p .`, `npm run build`, server typecheck + full server tests, and confirm demo mode still works (invoice → approve → simulate → verify). Update docs/backend/PROGRESS.md and give me the Report: files changed, what replaced each `update((` call, the UI walkthrough results for both modes, anything still unverified.
+```
+
+---
+
+## Phase 5 fixes, round 2 (small — before Phase 6)
+
+```
+Phase 5 round-2 fixes. Read docs/backend/PROGRESS.md first. Demo mode must stay unchanged. Do not touch server/.env, run db:seed, reset the shared workspace, or commit.
+
+1. addTransaction in hosted mode throws on API failure (future date, 403 for a Viewer, network error) and Transactions.tsx:381 has no try/catch, so the modal just stays open with no message. Make hosted addTransaction use runHostedMutation-style handling: return the Transaction on success, and on failure either return a Result or have the caller catch and toast the readable ApiError message and keep the form open. Also check every other store method that still returns a bare Promise (createInvoice, importTransactions) has its callers wrapped in try/catch with a toast.
+
+2. Lockfile: root package.json gained vitest but pnpm-lock.yaml was not updated, and the `test` script runs `node server/node_modules/vitest/vitest.mjs` (reaches into server's node_modules). Run `pnpm add -D vitest` at the root so pnpm-lock.yaml is updated, change the script to `vitest run test/frontend.test.ts`, and confirm `pnpm install --frozen-lockfile` succeeds in a clean checkout and `npm test` still passes. Also make sure the server has its own lockfile entries unchanged.
+
+3. Server tests still missing (the suite stayed at 31 tests): add tests for PUT /api/v1/settings/forecast-assumptions — Owner and Finance Manager succeed, Viewer gets 403, negative threshold or non-integer delay returns 400, a non-Sent invoice or unknown id returns 409 and NOTHING is saved (threshold unchanged), duplicate ids 400, and one "Forecast assumptions updated" audit event is written on success only. Add a test that POST /admin/reset-demo is refused for non-Owners and when the demo-reset flag is off. Report the new total.
+
+4. Cleanup: remove the deprecated `createOffer` alias from the Store type/implementation (use addOffer everywhere). Remove the `setCustomApiBase` test hook from production api.ts if vitest can stub import.meta.env / use vi.stubEnv instead; otherwise leave it but mark it test-only with a comment.
+
+5. Hosted UI walkthrough was NOT reported last round. Do it through the browser, not API calls: API on 8787, frontend with VITE_API_URL=http://localhost:8787. (a) owner login → create USD invoice → Request PayPal send → Approve → payer link shown, no "Simulate client payment". (b) login as finance@ and try to approve a >$6,000 item → blocked with "Owner approval required" or a toast from the server 403, app stays usable and keeps your open drawer. (c) add a transaction with a future date → readable error toast, modal stays open; valid transaction → persists after hard reload. (d) change safety threshold in Cash Flow assumptions → persists after reload. (e) delete the token in sessionStorage and click any action → login page with "Your session expired. Sign in again." (f) stop the API → Retry screen; restart → Retry works. (g) Viewer login: all create/edit buttons disabled. Then demo mode regression: invoice → approve → simulate payer → verify → Paid. Ask me for the sandbox payer credentials for the real payment check; never write them down.
+
+6. Run root tsc, `npm run build`, `npm test`, server typecheck and full server tests. Update docs/backend/PROGRESS.md and give me the Report: files changed, new test totals, walkthrough results per step a–g, anything still unverified.
+```
+
+---
+
+## Phase 5 fixes, round 3 — found in manual browser testing (before Phase 6)
+
+```
+Phase 5 round-3 fixes from manual testing. Read docs/backend/PROGRESS.md first. Demo mode must keep working. Do not touch server/.env, run db:seed, reset the shared workspace, or commit.
+
+0. ALREADY PATCHED by the reviewer — verify and test only: server/src/app.ts registered @fastify/cors without `methods`, so it defaulted to GET,HEAD,POST and the browser blocked every PUT/PATCH/DELETE cross-origin ("Could not reach the CentsAI API: Failed to fetch" on Cash Flow assumptions, settings saves, edits, deletes). I added methods: GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS. Add a test: an OPTIONS preflight from the configured CORS origin for PUT, PATCH and DELETE returns those methods in access-control-allow-methods. Then, in a browser against the running API (restart it first), prove PUT /settings/forecast-assumptions, PATCH a transaction and DELETE a draft invoice succeed from http://localhost:8443.
+
+1. No feedback while working. Every hosted action must show progress and prevent double submits:
+   - FormModal (src/components/ui.tsx): let onSubmit return a Promise; while it runs, disable the submit and Cancel buttons, show a spinner and "Saving…" (or a submitLabel-specific busy text such as "Creating invoice…"), ignore a second submit, and keep the modal open with the readable error if it fails.
+   - Drawer footer actions, Approvals (Approve / Reject / Confirm transfer), Settings Save, Verify payment status: same busy+disabled pattern via one shared `useAction()` hook returning { run, busy }.
+   - Add `pendingRequests` to the store (count of in-flight hosted calls) and show a thin progress bar under the header plus a "Working…" state while > 0, so nothing ever looks frozen.
+   - After success always give visible confirmation: toast + the new/changed row highlighted for ~2s (transactions, invoices, approvals).
+
+2. Duplicate transactions on save. Cause: no busy state, so a double click (or Enter + click) sends two POSTs, and apiFetch makes a NEW Idempotency-Key per fetch so the server cannot dedupe them. Fix: (a) busy state above; (b) generate the Idempotency-Key once per user action (per modal open / submit attempt) and pass it into apiFetch via an optional `idempotencyKey` argument, reuse it on retry of the same action; (c) add a test that two identical POSTs with the same key create one row. Also make the duplicate warning visible: when the server flags a transaction "Review", the toast must say "Saved — flagged as a possible duplicate of <id>" and the Transactions list must show the Review badge.
+
+3. Owner shouldn't have to request approval from themselves. New rule (maker-checker):
+   - Owner: the primary button on an invoice is "Send via PayPal" (and "Send reminder", "Pay contractor", "Cancel subscription"). One click creates AND approves the request in a single server call. Server: POST /approvals accepts `approveNow: true`, allowed only when ctx.role is Owner (403 otherwise). It runs the SAME pipeline (payloadHash, idempotency, executor, verify-before-record, audit) in one transaction-safe sequence; the approval record is stored with preparedBy = decidedBy = the Owner and audit detail "Auto-approved by Owner (self-requested)". It still appears in Approvals history, never in the Pending tab.
+   - Finance Manager: button says "Request approval from Owner"; it creates a Pending approval, shows "Sent to Owner for approval" and the Pending badge/count in the sidebar updates for the Owner. A Finance Manager may approve other people's requests up to the limit, but NEVER their own (server rule: approver !== preparedBy unless Owner; 403 with a clear message). Viewer: buttons disabled.
+   - Confirmation dialog before an Owner one-click send shows recipient, amount, currency and "This sends a real PayPal Sandbox invoice to <email>".
+   - Tests: Owner approveNow executes and ends Verified with exactly one audit trail; Finance Manager approveNow → 403; FM cannot approve own request; replaying the same Idempotency-Key does not send twice.
+
+4. Reminders must be honest. Today a reminder for a PayPal invoice calls PayPal's remind endpoint (PayPal emails the payer), but for a non-PayPal invoice the server only records "Email draft (not sent)". In the UI: PayPal invoice → label "Send reminder via PayPal (PayPal emails the client)"; bank-transfer invoice → label "Prepare reminder", and after approval show the saved draft with a "Copy text" button and a "Open in email app" mailto: link, plus the note "CentsAI doesn't send email in this prototype". Never show "sent" for an email that was only drafted. Show "Last reminder: date, channel" on the invoice and block a second reminder within 24h unless Owner confirms.
+
+5. Explain money direction in the UI (users are confused): an Invoice is money a CLIENT owes the AGENCY (receivable). In the invoice drawer and the new-invoice modal add one line of plain help: "You are billing <client>. They pay you. Status becomes Paid only after PayPal confirms or you record the bank reference." Rename any "Payments" wording that could mean outgoing money; outgoing money (contractors, payroll, subscriptions) lives in Payroll/Expenses and uses the approval flow.
+
+6. Re-run: server typecheck + full tests, root tsc, build, npm test. Do the hosted browser walkthrough yourself with a working browser (if your browser tool is broken, say so; do NOT mark steps verified from unit tests). Report per step what you actually saw. Update docs/backend/PROGRESS.md.
+```
+
+---
+
+## Phase 5 fixes, round 4 — create & send flow + drawer layout (before Phase 6)
+
+```
+Phase 5 round-4 fixes from manual testing. Read docs/backend/PROGRESS.md first. Demo mode must keep working. Do not touch server/.env, run db:seed, reset the shared workspace, or commit.
+
+1. BUG — "Create & send via PayPal" flow (src/pages/Invoices.tsx CreateInvoice.onSubmit). Today, in hosted mode it does: createInvoice → close() → onCreated(id) → requestPayPalSend(id, isOwner) in the background. So the modal closes at once and the drawer opens on a Draft invoice with a live "Send via PayPal" button while the real PayPal call is still running with no progress shown. If the owner clicks that button the server answers "already in approval", and a few seconds later the invoice flips to Sent by itself. Fix:
+   - Keep the modal OPEN for the whole sequence. Drive the busy label through steps: "Creating invoice…" → "Sending to PayPal…" (add a `busyLabel` state the modal can update, or let onSubmit report steps). Only after BOTH steps finish: close the modal, open the invoice drawer (it must already show status Sent + payer link), toast "INV-xxxx sent via PayPal Sandbox".
+   - If create succeeds but the send fails (PayPal error, validation, 403): close the modal, open the drawer on the Draft, and toast "INV-xxxx saved as draft. PayPal send failed: <readable reason>". Do not leave the user guessing and do not create a second invoice on retry.
+   - Same pattern for Finance Manager: step label "Creating invoice…" → "Requesting approval…", end with toast "Sent to Owner for approval" and the drawer showing "Awaiting approval AP-xxxx".
+   - In the drawer, if the invoice has an open approval (Pending/Submitted) show that state clearly: Owner sees "Sending to PayPal…" with a spinner while Submitted (button disabled), or "Awaiting approval AP-xxxx" with a link to Approvals when Pending. Never show an active Send button that will only fail with "already open". If the server returns the already-open conflict anyway, show "A send is already in progress for this invoice" instead of an error.
+   - Make sure createInvoice + send use ONE Idempotency-Key per submit attempt (reuse on retry) so a double click can't create two invoices or two PayPal sends.
+   - Add a UI-level test or a manual proof: owner creates an invoice with PayPal + send now → exactly one invoice, one approval (Verified), one PayPal invoice id, drawer shows Sent immediately after the modal closes.
+
+2. Same issue elsewhere — check every place that closes a modal first and fires the real action afterwards (reminder modal, record-payment modal, contractor payment, cancel subscription) and apply the same rule: modal stays open with progress until the action finishes, then show the result.
+
+3. UI — invoice drawer layout (see Invoices.tsx drawer footer and the PayPal card):
+   - The footer button "Send reminder via PayPal (PayPal emails the client)" is too long: it overflows the drawer on the left and hides the label. Shorten the label to "Remind via PayPal" (bank-transfer invoices: "Prepare reminder") and move the explanation to small helper text under the footer or a tooltip. Make the footer `display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end` with `white-space:nowrap` buttons, and verify at 360px, 768px and desktop width that nothing is clipped.
+   - In the PayPal card, "Last verified …" overlaps the hint "Pay it in the PayPal sandbox with your sandbox personal account, then click Verify payment status." and the "Payer link". Lay the card out as stacked rows (title/status, invoice id, last verified, payer link, hint) with normal flow and spacing, no absolute positioning. Check light and dark theme.
+   - Replace hardcoded Tailwind colours added last round (text-blue-300, text-red-500, bg-blue-500/10, banner-danger utility classes in FormModal and the "You are billing …" help box) with the app's CSS variables/classes so contrast is fine in light theme too.
+
+4. Audit trail for Owner one-click actions (server/src/modules/approvals/service.ts createApproval with approveNow): right now non-contractor approveNow writes only ONE audit row and its detail is replaced with the fixed text "Auto-approved by Owner (self-requested)", dropping the PayPal invoice id/result detail, and no "Approval requested"/"Approved & submitted" rows exist. Write the same rows as the normal flow (Approval requested → Approved & submitted with note "auto-approved by Owner (self-requested)" → the executor's own result row with its original detail). Also extract the execute-and-commit block that is now duplicated between createApproval(approveNow) and runApproval into one shared function so both paths cannot drift. Existing tests must still pass; add an assertion on the audit rows.
+
+5. Run server typecheck + tests, root tsc, build, npm test. This time do the browser flow yourself if your browser tool works; if it does not, say so plainly and do not mark UI steps verified. Update docs/backend/PROGRESS.md and report.
+```
+
+---
+
+## Phase 6 — Test gaps (hardening only)
+
+```
+Continue from docs/backend/PROGRESS.md. Read docs/backend/SPEC.md §9 and §10. No new features and no UI changes in this phase. Do not touch server/.env, run db:seed, or reset the shared workspace. Do not commit. Use isolated test schemas/workspaces only.
+
+Task: close the gaps against SPEC §10. First list in PROGRESS.md which §10 items already have a test (file + test name) and which do not, then add only the missing ones:
+1. Engine golden test: freeze time (vi.setSystemTime), build createSeed(), snapshot key outputs of forecastAll, receivables, buildBriefing, projectStats and loanStatus. Add a second case that proves the server loadState() numbers equal the frontend engine on the same seed.
+2. Permission matrix: Viewer / Finance Manager / Owner x EVERY mutating route (POST, PUT, PATCH, DELETE under /api/v1, including approvals approve/reject/retry/confirm-transfer, approveNow, settings, forecast-assumptions, admin/reset-demo, imports, deletes). Drive it from the registered route list so a new route without a matrix entry fails the test. Expected: Viewer 403 everywhere; Finance Manager 403 on owner-only routes and above the limit; Owner 2xx.
+3. Workspace isolation: a user of workspace A gets 404 (not 403) for workspace B ids on every id-taking route (invoices, transactions, approvals, clients, projects, employees, loans, scenarios, recurring costs, contractor bills) and cannot read B through list or state endpoints. Also a valid token with a workspace id header the user is not a member of gets 404.
+4. Approvals: concurrent double approve executes once; stale payload hash; Finance Manager blocked above the limit; maker-checker (cannot approve own); approveNow replay with the same Idempotency-Key does not execute twice.
+5. Security checklist spot tests from SPEC §9: audit CSV export neutralises cells starting with = + - @ tab CR; audit rows cannot be updated or deleted (DB trigger); error responses have no stack trace; login rate limit returns 429 after 10 attempts/min; webhook with a bad signature is rejected and a duplicate webhook is a no-op; no secret appears in /health or error bodies.
+6. Run the full server suite, root tsc, build and npm test. Report which previously missing tests were added, the new total, and any real bug the new tests exposed (fix it only if small and tell me; otherwise list it).
+
+Report: coverage table (SPEC §10 item -> test name), new totals, bugs found, files changed. Update docs/backend/PROGRESS.md.
+```
+
+---
+
+## Phase 7 — Deploy and submission docs (AFTER the AI layer, before the deadline)
 
 ```
 Continue from docs/backend/PROGRESS.md. Read docs/backend/SPEC.md §9 and §10.
 
 Task:
-1. Fill any missing tests from SPEC §10 (engine golden test with frozen time, permission matrix for every mutating route, workspace isolation).
-2. Serve the built frontend from Fastify in production (@fastify/static for ../dist with SPA fallback), so one Render web service hosts everything on one origin.
-3. `render.yaml` (web service: build = install + prisma migrate deploy + frontend build + server build; start = node server/dist/index.js; health check /api/v1/health). Document every env var in the README.
-4. Root `README.md`: what CentsAI is, architecture diagram (mermaid), how to run locally (demo mode and hosted mode), demo credentials (from the seed's SEED_DEMO_PASSWORD you set), PayPal sandbox steps, test commands, known limitations, licence.
-5. `docs/SECURITY.md` (FinTechathon security self-assessment): permission tiers and limits, approval state machine and payload binding, verify-before-record, idempotency, audit trail, secrets handling, webhook verification, rate limits, known risks and what is still simulated.
-6. `docs/OPERATION_LOGS.md`: how to export sandbox operation logs (audit CSV + PayPal invoice ids) as execution evidence.
+1. Serve the built frontend from Fastify in production (@fastify/static for ../dist with SPA fallback), so one Render web service hosts everything on one origin.
+2. `render.yaml` (web service: build = install + prisma migrate deploy + frontend build + server build; start = node server/dist/index.js; health check /api/v1/health). Document every env var in the README.
+3. Root `README.md`: what CentsAI is, architecture diagram (mermaid), how to run locally (demo mode and hosted mode), demo credentials (from the seed's SEED_DEMO_PASSWORD you set), PayPal sandbox steps, test commands, known limitations, licence.
+4. `docs/SECURITY.md` (FinTechathon security self-assessment): permission tiers and limits, approval state machine and payload binding, verify-before-record, idempotency, audit trail, secrets handling, webhook verification, rate limits, known risks and what is still simulated.
+5. `docs/OPERATION_LOGS.md`: how to export sandbox operation logs (audit CSV + PayPal invoice ids) as execution evidence.
+6. `docs/DEMO_SCRIPT.md`: the exact click path for a 3-minute demo video (owner login -> create invoice -> send via PayPal -> pay on the sandbox payer page -> verify -> Paid + ledger + audit; finance manager over-limit denial).
 7. Run the full test suite and a production build; update docs/backend/PROGRESS.md.
 
 Report: files changed, test totals, deployed URL (if done), remaining risks.

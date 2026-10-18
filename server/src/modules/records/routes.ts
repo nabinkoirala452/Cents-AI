@@ -78,7 +78,9 @@ const transactionCreate = z.object({
   notes: optionalString(2000),
 }).strict()
 
-const transactionPatch = transactionCreate.partial().strict().refine(
+const transactionPatch = transactionCreate.partial().extend({
+  status: z.literal("Recorded").optional(),
+}).strict().refine(
   (value) => Object.keys(value).length > 0,
   "At least one transaction field is required",
 )

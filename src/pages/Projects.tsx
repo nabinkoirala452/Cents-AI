@@ -136,23 +136,18 @@ export default function ProjectsPage() {
 }
 
 function ProjectDrawer({ id, close }: { id: string; close: () => void }) {
-  const { state, update, log, actor, toast, can } = useStore()
+  const { state, assignHours, log, actor, toast, can } = useStore()
   const p = projectStats(state, state.projects.find((x) => x.id === id)!)
   const [employeeId, setEmployeeId] = useState(state.employees[0]?.id ?? "")
   const [hours, setHours] = useState(p.project.unassignedHours || 8)
   const fromUnassigned = Math.min(hours, p.project.unassignedHours)
 
-  const assign = () => {
+  const assign = async () => {
     if (!can.edit) return toast("Viewers can't change project data.")
     if (!(hours > 0)) return toast("Enter a positive number of hours")
     const employee = state.employees.find((e) => e.id === employeeId)!
-    update((d) => {
-      const proj = d.projects.find((x) => x.id === id)!
-      const entry = proj.timeEntries.find((t) => t.employeeId === employeeId)
-      if (entry) entry.hours += hours
-      else proj.timeEntries.push({ employeeId, hours })
-      proj.unassignedHours = Math.max(0, proj.unassignedHours - hours)
-    })
+    const res = await assignHours(id, employeeId, hours)
+    if (!res.ok) return toast(res.message)
     log({ actor, action: "Hours attributed", detail: `${hours}h on ${p.project.name} → ${employee.name} (${money((employee.monthlySalary / HOURS_PER_MONTH) * hours)})`, ref: id, outcome: "info" })
     toast(`${hours}h assigned — margin recalculated`)
   }

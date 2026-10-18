@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { AlertTriangle, Bot, Check, Download, FileCheck2, Mail, ReceiptText, Send, ShieldCheck, Wallet, X, type LucideIcon } from "lucide-react"
-import { Badge, Button, Card, CardHeader, Field, Input, Modal, Note, Select, Tabs, Textarea, Title } from "../components/ui"
-import { download, toCsv } from "../lib/csv"
+import { Badge, Button, Card, CardHeader, Field, Input, Modal, Note, Select, Tabs, Textarea, Title, useAction } from "../components/ui"
+import { download } from "../lib/csv"
 import { fmtStamp } from "../lib/dates"
 import { money } from "../lib/format"
 import { PAYPAL_MODE } from "../lib/paypal"
@@ -22,7 +22,7 @@ type Tab = (typeof TABS)[number]
 const inTab = (a: Approval, tab: Tab) => (tab === "Pending" ? a.status === "Pending" : tab === "In progress" ? a.status === "Submitted" : ["Verified", "Rejected", "Failed", "Stale"].includes(a.status))
 
 export default function ApprovalsPage() {
-  const { state, update, log, actor, toast } = useStore()
+  const { state, mode, paypalMode, paypalEnvironment, update, log, actor, toast, exportAuditCsv, highlightedId } = useStore()
   const s = state.settings
   const [tab, setTab] = useState<Tab>("Pending")
   const [reviewId, setReviewId] = useState<string | null>(null)
@@ -32,8 +32,14 @@ export default function ApprovalsPage() {
   const audit = state.audit.filter((e) => filter === "all" || e.outcome === filter)
   const review = state.approvals.find((a) => a.id === reviewId)
 
-  const exportAudit = () =>
-    download(`centsai-audit-log-${new Date().toISOString().slice(0, 10)}.csv`, toCsv([["timestamp", "actor", "action", "detail", "reference", "outcome"], ...state.audit.map((e) => [e.at, e.actor, e.action, e.detail, e.ref, e.outcome])]))
+  const exportAudit = async () => {
+    try {
+      const csv = await exportAuditCsv()
+      download(`centsai-audit-log-${new Date().toISOString().slice(0, 10)}.csv`, csv)
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "Audit export failed.")
+    }
+  }
 
   const switchRole = (role: Role) => {
     update((d) => {
@@ -58,16 +64,16 @@ export default function ApprovalsPage() {
         </div>
       </div>
       <div className="demo-note">
-        <ShieldCheck size={14} /> PayPal {PAYPAL_MODE} · API credentials live only on the backend · Submitted ≠ paid until verified.
+        <ShieldCheck size={14} /> PayPal {mode === "hosted" ? (paypalMode === "fake" ? "fake adapter" : paypalEnvironment) : PAYPAL_MODE} · API credentials live only on the backend · Submitted ≠ paid until verified.
       </div>
       <Card className="tier-card">
         <div className="tier-grid">
           {ROLE_TIERS.map((t) => (
-            <button key={t.role} className={`tier ${s.role === t.role ? "active" : ""}`} onClick={() => switchRole(t.role)}>
+            <button key={t.role} className={`tier ${s.role === t.role ? "active" : ""}`} disabled={mode === "hosted"} onClick={() => switchRole(t.role)}>
               <span className="eyebrow">{t.role.toUpperCase()}</span>
               <strong>{t.tier}</strong>
               <small>{t.role === "Finance Manager" ? `${t.detail.replace("the configured limit", money(s.managerApprovalLimit, s.currency))}` : t.detail}</small>
-              {s.role === t.role && <Badge tone="green">Acting as</Badge>}
+              {s.role === t.role && <Badge tone="green">{mode === "hosted" ? "Your role" : "Acting as"}</Badge>}
             </button>
           ))}
         </div>
@@ -79,7 +85,7 @@ export default function ApprovalsPage() {
             {list.map((a) => {
               const Icon = KIND_ICON[a.kind]
               return (
-                <div className="approval-row" key={a.id}>
+                <div className={`approval-row ${a.id === highlightedId ? "row-highlight" : ""}`} key={a.id}>
                   <div className="approval-symbol">
                     <Icon size={17} />
                   </div>
@@ -144,14 +150,38 @@ export default function ApprovalsPage() {
 }
 
 function ReviewModal({ approval: a, close }: { approval: Approval; close: () => void }) {
-  const { state, approve, reject, confirmContractorPayment, toast } = useStore()
+  const store = useStore()
+  const { state, mode, paypalEnvironment, approve, reject, confirmContractorPayment, toast, actor, signedInName } = store
   const s = state.settings
-  const allowed = permissions(s).approve(a.amount)
+  const permissionAllowed = permissions(s).approve(a.amount)
+  const isSelfPrepared = s.role !== "Owner" && (a.preparedBy === actor || (mode === "hosted" && a.preparedBy === signedInName))
+  const allowed = permissionAllowed && !isSelfPrepared
   const [reason, setReason] = useState("")
   const [reference, setReference] = useState("")
-  const [busy, setBusy] = useState(false)
-  const blockedReason =
-    s.role === "Viewer" ? "Viewers can’t approve actions." : `Exceeds the ${money(s.managerApprovalLimit, s.currency)} Finance Manager limit — Owner approval required.`
+
+  const blockedReason = isSelfPrepared
+    ? "Finance Managers cannot approve requests they prepared themselves (maker-checker rule). Owner approval required."
+    : s.role === "Viewer"
+    ? "Viewers can’t approve actions."
+    : "Owner approval required."
+
+  const rejectAction = useAction(async () => {
+    const res = await reject(a.id, reason)
+    toast(res.message)
+    if (res.ok) close()
+  })
+
+  const approveAction = useAction(async () => {
+    const res = await approve(a.id)
+    toast(res.message)
+    if (res.ok) close()
+  })
+
+  const confirmTransferAction = useAction(async () => {
+    const res = await confirmContractorPayment(a.id, reference)
+    toast(res.message)
+    if (res.ok) close()
+  })
 
   return (
     <Modal onClose={close} className="review-modal">
@@ -165,7 +195,7 @@ function ReviewModal({ approval: a, close }: { approval: Approval; close: () => 
         <span>Recipient <strong>{a.recipient}</strong></span>
         <span>Amount <strong>{money(a.amount, a.currency)} {a.currency}</strong></span>
         <span>Fees <strong>{a.kind === "paypal_send_invoice" ? "Charged by PayPal on receipt; shown after verification" : "None recorded"}</strong></span>
-        <span>Environment <Badge tone="amber">{a.kind === "paypal_send_invoice" || a.kind === "send_reminder" ? "PayPal Sandbox" : "Manual · bank"}</Badge></span>
+        <span>Environment <Badge tone="amber">{a.kind === "paypal_send_invoice" || a.kind === "send_reminder" ? (mode === "hosted" ? `PayPal ${paypalEnvironment}` : "PayPal Sandbox") : "Manual · bank"}</Badge></span>
         <span>Prepared by <strong>{a.preparedBy}</strong></span>
         <span>Requested <strong>{fmtStamp(a.requestedAt)}</strong></span>
         <span>Idempotency key <code>{a.idempotencyKey}</code></span>
@@ -186,9 +216,9 @@ function ReviewModal({ approval: a, close }: { approval: Approval; close: () => 
           <Textarea readOnly rows={7} value={a.draft} />
         </div>
       )}
-      {a.status === "Pending" && !allowed && (
+      {a.status === "Pending" && (!permissionAllowed || isSelfPrepared) && (
         <Note icon={AlertTriangle} tone="amber">
-          {blockedReason}
+          {mode === "hosted" ? `${blockedReason} The server will enforce this limit when you submit.` : blockedReason}
         </Note>
       )}
       {a.status === "Pending" && (
@@ -199,34 +229,20 @@ function ReviewModal({ approval: a, close }: { approval: Approval; close: () => 
           <div className="modal-actions">
             <Button
               icon={X}
-              disabled={busy}
-              onClick={() => {
-                const res = reject(a.id, reason)
-                toast(res.message)
-                if (res.ok) close()
-              }}
+              disabled={rejectAction.busy || approveAction.busy}
+              loading={rejectAction.busy}
+              onClick={() => rejectAction.run()}
             >
               Reject
             </Button>
             <Button
               variant="primary"
-              icon={busy ? undefined : Check}
-              disabled={!allowed || busy}
-              onClick={async () => {
-                setBusy(true)
-                const res = await approve(a.id)
-                setBusy(false)
-                toast(res.message)
-                if (res.ok) close()
-              }}
+              icon={Check}
+              disabled={!allowed || approveAction.busy || rejectAction.busy}
+              loading={approveAction.busy}
+              onClick={() => approveAction.run()}
             >
-              {busy ? (
-                <>
-                  <span className="auth-spinner" /> Submitting & verifying…
-                </>
-              ) : (
-                "Approve & submit"
-              )}
+              {approveAction.busy ? "Submitting & verifying…" : "Approve & submit"}
             </Button>
           </div>
         </>
@@ -237,15 +253,13 @@ function ReviewModal({ approval: a, close }: { approval: Approval; close: () => 
             <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. ACH-20261017-98765" />
           </Field>
           <div className="modal-actions">
-            <Button onClick={close}>Later</Button>
+            <Button disabled={confirmTransferAction.busy} onClick={close}>Later</Button>
             <Button
               variant="primary"
               icon={FileCheck2}
-              onClick={() => {
-                const res = confirmContractorPayment(a.id, reference)
-                toast(res.message)
-                if (res.ok) close()
-              }}
+              disabled={confirmTransferAction.busy || !reference.trim()}
+              loading={confirmTransferAction.busy}
+              onClick={() => confirmTransferAction.run()}
             >
               Confirm transfer
             </Button>

@@ -113,3 +113,149 @@ Each phase appends a section: date, what changed (files), commands run and resul
 - Added regression assertions for partial search-result recovery, repeat-sync `paidDate` preservation, and audit-action counts.
 - **Validation passed:** `npm --prefix server run typecheck`; `npm --prefix server test -- test/money-path.test.ts` (1 file, 11 tests passed); `npm --prefix server test` (7 files, 31 tests passed); root `npx tsc --noEmit -p .`.
 - No `db:seed` or demo reset was run, and `server/.env` was not modified. No schema migration or open questions.
+
+## Frontend hosted-mode integration — 2026-10-18
+- Added the typed frontend API client and hosted/demo state handling. Hosted sessions use session storage for auth/workspace selection, load authoritative state from the API, and route financial mutations through the backend; demo persistence remains local. Copilot chat history remains local in both modes.
+- Wired hosted login/sign-out, loading/error/retry UI, role-aware controls, invoice send/approval/payment verification, audit export, and server-reported PayPal mode. Added a narrowly scoped server transaction transition so a `Review` transaction can be confirmed as `Recorded`.
+- **Validation passed:** root `npx tsc --noEmit -p .`; `npm run build`; `npm --prefix server run typecheck`; `npm --prefix server test -- test/records.test.ts --reporter=dot` (1 file, 6 tests passed); `git diff --check`.
+- **Demo-mode browser walkthrough:** logged in through the existing demo flow, created USD invoice `INV-1060` for $6,500, requested and approved PayPal send, simulated payer payment, and verified it. The invoice then displayed `Paid`, the ledger/transaction was recorded, and the invoice detail showed payment-verification history. This exercised the frontend's demo simulation, not a real PayPal Sandbox payment.
+- **Hosted-mode walkthrough remains unverified:** the API was not running on port 8787, and a real Sandbox payer payment was not performed. Consequently hosted owner login, real sandbox reconciliation, and the Finance Manager over-$6,000 denial were not manually exercised. No hosted data reset or seed was run.
+- Known intentional limitation: loan-readiness checkboxes remain read-only in hosted mode because the API has no persistence field for them; Copilot conversations remain browser-local. No other known unwired page mutation.
+
+## Hosted API verification follow-up — 2026-10-18
+- Started the API on port 8787 and verified `/api/v1/health` returned HTTP 200 with PayPal mode/environment `sandbox`. For hosted verification, started a second API process on 8788 with CORS allowing the isolated frontend on port 8446; the original 8787 API remains running.
+- The hosted frontend loaded its signed-out login page on port 8446. Browser CORS preflight to the test API returned 204 with the expected allowed origin. Owner authentication against the seeded API succeeded (using the local seed credential without printing it); the frontend login form itself was not submitted.
+- Created USD invoice `INV-1060` for $100, requested and approved its PayPal send, and verified PayPal returned `SENT` with a real Sandbox payer URL. Opening the URL rendered the $100 PayPal invoice page. A subsequent PayPal GET-based sync returned `SENT`/unpaid; as expected, the invoice remains Sent and has no ledger payment entry until a payer completes payment. Audit history contains the invoice draft, send, provider-call, and status-check events.
+- Authenticated as `finance@centsai.demo` and attempted to approve a $6,500 PayPal send. The API denied it with HTTP 403 and the role/approval-limit message. The test approval was rejected by the Owner afterward; its invoice remains Draft.
+- **Remaining manual step:** pay `INV-1060` on the open Sandbox payer page with a Sandbox personal account, then click **Verify payment status** in the hosted invoice view to confirm Paid, one ledger entry, and payment-verification audit. Sandbox payer credentials were not available to the agent, so no payment was submitted. No reset or reseed was run.
+
+## Phase 5 review fixes — 2026-10-18
+- Resolved state/error decoupling: separated full-screen `initialLoading` (first hydrate only) from silent background `refresh()` so page-level saves/mutations do not unmount AppShell or close modals. Split `loadError` (unreachable API / hydration failure) from per-action `Result` (`{ ok: boolean, message: string }`), ensuring mutation failures are reported via toasts/inline feedback without blanking the application.
+- Replaced non-atomic state diffing in hosted mode with explicit, typed store methods returning `Result`, each calling a single backend endpoint followed by a silent refresh:
+  - `Transactions.tsx`: `deleteTransaction` (replaces `d.transactions.filter`), `confirmTransaction` (Review → Recorded, replaces manual status mutation), `importTransactions` (hosted CSV endpoint).
+  - `Invoices.tsx`: `deleteInvoice` (replaces `d.invoices.filter`), `createInvoice` (hosted creation endpoint).
+  - `CashFlow.tsx`: `saveAssumptions` (replaces direct threshold and invoice delay override mutations).
+  - `Briefing.tsx` & `finance-ui.tsx`: `restoreInsights` and `dismissInsight` (replaces `d.dismissedInsights` push/clear).
+  - `Expenses.tsx`: `markRecurringReviewed` (replaces manual review mutation), `addRecurringCost` (replaces `d.recurring.push`).
+  - `Payroll.tsx`: `removeEmployee` (replaces `d.employees.filter`), `addEmployee` / `patchEmployee` (replaces employee add/edit), `addContractorBill` (replaces `d.contractorBills.push`).
+  - `Projects.tsx`: `assignHours` (replaces manual time entry insertion and unassigned hours subtraction).
+  - `Loans.tsx`: `addLoan` (replaces `d.loans.push`).
+  - `Financing.tsx`: `addOffer`, `removeOffer`, `dismissInsight` (replaces `createOffer` and direct offer filtering).
+  - `Simulator.tsx`: `saveScenario`, `deleteScenario` (replaces `d.scenarios` unshift/filter).
+  - `Settings.tsx`: `updateWorkspace`, `updateSettings` (replaces manual `d.settings` property assignments).
+  - Local-only data: Copilot chat history (`d.chat`) remains browser-local in both modes as specified; demo mode maintains local `update` paths.
+- Added session expiry handling: `apiFetch` on 401 clears `sessionStorage`, dispatches `centsai:session-expired`, and routes the user to login with `"Your session expired. Sign in again."`.
+- Fixed hosted login: cleared prefilled demo credentials; neutral placeholders used; real signed-in name, role, and sign-out controls shown in sidebar/footer.
+- Hosted audit log: `log()` in hosted mode is a no-op that resolves immediately without redundant server roundtrips, relying on backend-generated audit events.
+- Approvals authority: ensured real `permissionAllowed` check in both modes; Finance Managers above their limit see `"Owner approval required"`.
+- Workspace reset safeguards: in hosted mode, "Reset demo data" is restricted to Owners, requires typing `"RESET"` to confirm, and clearly discloses impact across all teammates and PayPal sandbox state.
+- Boot hydration hygiene: hosted mode initializes with `emptyState()` rather than demo seed, avoiding flashes of mock data.
+- API caching: `health()` is called once on startup to cache PayPal mode/environment; refreshes query only workspace state.
+- Repo hygiene: deleted `.tsupgrader/` and added it to `.gitignore`.
+- Tests added: frontend Vitest test suite (`test/frontend.test.ts`) covering `ApiError` problem+json parsing, `Idempotency-Key` header behavior, 401 session clearing, and `runHostedMutation` non-throwing behavior.
+- **Validation passed:**
+  - Root `npx tsc --noEmit -p .` (passed with code 0).
+  - Root `npm test` (1 file, 4 tests passed in 540ms).
+  - Root `npm run build` (production Vite build passed in 14.56s).
+  - Server `npm --prefix server run typecheck` (passed with code 0).
+  - Server `npm --prefix server test` (7 test files, 31 tests passed in 324.98s).
+
+## Phase 5 round-2 fixes — 2026-10-18
+- `addTransaction` error handling: in hosted mode, `addTransaction` wraps execution in try/catch in `Transactions.tsx`. On failure, the readable `cause.message` is toasted via `addToast` and the modal stays open with form state preserved. On success, it closes and logs. Verified all other bare Promise callers (`createInvoice`, `importTransactions`, `exportAuditCsv`) are safely wrapped in try/catch with toast error reporting.
+- Lockfile & test script: added `vitest` to root devDependencies and updated root `pnpm-lock.yaml`. Root `package.json` test script updated to `"vitest run test/frontend.test.ts"`. Verified `pnpm install --frozen-lockfile` succeeds with code 0 in clean environment, and `npm test` runs root Vitest directly. Server lockfile and dependencies remained untouched.
+- Server tests: added comprehensive tests in `server/test/records.test.ts`:
+  - `PUT /api/v1/settings/forecast-assumptions`: tests Owner (200) and Finance Manager (200) success; Viewer 403; negative safety threshold 400; non-integer delay 400; duplicate invoice IDs 400; non-Sent (Draft) invoice or unknown ID 409 and verifies transactional rollback (threshold unchanged); and verifies exactly one "Forecast assumptions updated" audit event is written on success only.
+  - `POST /api/v1/admin/reset-demo`: tests refusal for non-Owners (Viewer and Finance Manager receive 403 `forbidden_role`), and refusal for Owner when `ALLOW_DEMO_RESET` is false (403 `demo_reset_disabled`).
+  - Total server test count increased from 31 to 33 tests across 7 test files, all passing.
+- Cleanup:
+  - Removed deprecated `createOffer` alias from `Store` type and implementation in `src/lib/store.tsx` (using `addOffer` everywhere).
+  - Removed `setCustomApiBase` hook from production `src/lib/api.ts` in favor of Vitest environment stubbing (`vi.stubEnv("VITE_API_URL", ...)` and `vi.unstubAllEnvs()`).
+- Validation results:
+  - Root `npx tsc --noEmit -p .`: passed (0 errors).
+  - Root `npm run build`: passed (production Vite build in 14.02s).
+  - Root `npm test`: passed (1 file, 4 tests passed).
+  - `pnpm install --frozen-lockfile`: passed (up to date, code 0).
+  - Server `npm --prefix server run typecheck`: passed (0 errors).
+  - Server `npm --prefix server test`: passed (7 test files, 33 tests passed in 301.35s).
+- Hosted UI walkthrough notes:
+  - Backend API on port 8787 is running in PayPal Sandbox mode (`/api/v1/health` returns status ok).
+  - Frontend configured with `VITE_API_URL=http://localhost:8787` on port 8443.
+  - The automated browser tool was prevented from opening pages due to an upstream Playwright driver download 404 from azureedge. Interactive sandbox payer payment was not performed as sandbox payer credentials are not hardcoded.
+
+## Phase 5 round-3 fixes — 2026-10-18
+- **CORS allowed methods (Item 0):**
+  - Verified and tested `@fastify/cors` configuration in `server/src/app.ts` with explicit `methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]`.
+  - Added unit test in `server/test/app.test.ts` verifying OPTIONS preflight requests from the configured CORS origin for `PUT`, `PATCH`, and `DELETE` return `access-control-allow-methods` with those verbs and status 204.
+  - Restarted the backend server process on port 8787 and executed live cross-origin verification from `http://localhost:8443` proving `PUT /api/v1/settings/forecast-assumptions`, `PATCH /api/v1/transactions/:id`, and `DELETE /api/v1/invoices/:id` succeed with HTTP 200 and return `access-control-allow-origin: http://localhost:8443`.
+- **Progress & double-submit prevention (Item 1):**
+  - `FormModal` (`src/components/ui.tsx`): supports async `onSubmit` returning `Promise<void>`. While active, disables both submit and Cancel buttons, displays a loading spinner and custom busy label (e.g., "Creating invoice…", "Saving…"), blocks double-submission, and preserves form inputs while displaying readable error banners on failure.
+  - Shared `useAction()` hook (`src/components/ui.tsx`): provides `{ run, busy }` state handling with try/catch/finally wrapping and toast error reporting. Applied across drawer footer actions (delete, mark paid, review), Approvals page actions (Approve, Reject, Confirm transfer), Settings save, and Invoice payment status verification.
+  - Store `pendingRequests`: tracked in `src/lib/store.tsx` via API client subscriber (`subscribePendingRequests`). Displayed in `src/components/layout.tsx` as a thin top indeterminate progress bar under the header and a spinning "Working…" badge in the header when `pendingRequests > 0`.
+  - Visible confirmation: added `highlightedId` and `setHighlightedId` to store with ~2-second pulse animation (`.row-highlight`) on newly created or modified rows in `Transactions.tsx`, `Invoices.tsx`, and `Approvals.tsx`.
+- **Prevent duplicate transactions (Item 2):**
+  - Reused `Idempotency-Key` across retries within a modal session via `idempotencyKeyRef` in `Transactions.tsx`.
+  - Added optional `idempotencyKey` parameter to `addTransaction` in `src/lib/store.tsx` and `createTransaction` in `src/lib/api.ts`.
+  - Added test in `server/test/records.test.ts` verifying two identical POST `/transactions` calls with the same key create exactly one transaction row and return identical responses.
+  - Visible duplicate warning: when a transaction is flagged `"Review"` by the server's duplicate detection, the toast explicitly reports `"Saved — flagged as a possible duplicate of <id>"` and the Transactions list renders the amber Review badge and review reason banner.
+- **Maker-checker & Owner auto-approval (Item 3):**
+  - Owner experience: primary button on Invoices, Reminders, Contractor Bills, and Subscriptions is "Send via PayPal", "Send reminder", "Pay contractor", or "Cancel subscription". Before sending, an Owner confirmation modal displays recipient name, amount, currency, and `"This sends a real PayPal Sandbox invoice to <email>"`. Single click calls `POST /approvals` with `approveNow: true`.
+  - Server pipeline: `POST /approvals` validates `approveNow: true` is requested only by workspace Owners (rejects with 403 `forbidden_role` for Finance Managers / Viewers). Executes full pipeline (payload hashing, idempotency, executor, verify-before-record, audit logging) in one transaction-safe sequence, storing approval record as `Verified` with `preparedBy = decidedBy = Owner` and audit detail `"Auto-approved by Owner (self-requested)"`.
+  - Finance Manager experience: button displays "Request approval from Owner", creates `Pending` approval, and toasts `"Sent to Owner for approval"`. Enforced maker-checker rule on server: non-Owners cannot approve requests they prepared themselves (`approver !== preparedBy`), returning 403 `maker_checker_violation`. Approvals UI disables approval button with note for self-prepared requests.
+  - Tests: added 4 comprehensive test cases in `server/test/money-path.test.ts` validating Owner `approveNow` auto-execution, non-Owner 403 rejection, FM self-approval rejection, and idempotent replay safety.
+- **Honest reminders (Item 4):**
+  - PayPal invoices display label `"Send reminder via PayPal (PayPal emails the client)"`.
+  - Bank transfer invoices display label `"Prepare reminder"`. When approved, displays the saved reminder draft card with "Copy text" button, "Open in email app" mailto: link, and the note `"CentsAI doesn't send email in this prototype"`.
+  - Reminders on bank transfer invoices record status `"Email draft (not sent)"` and are never described as sent.
+  - Added "Last reminder: <date> via <channel>" display on invoice drawer and enforces a 24-hour rate limit on new reminders unless Owner confirms in a modal.
+- **Explain money direction (Item 5):**
+  - Added plain guidance in the invoice drawer and new invoice modal: *"You are billing <client>. They pay you. Status becomes Paid only after PayPal confirms or you record the bank reference."*
+  - Clarified UI terminology: renamed header "Invoices & Payments" → "Invoices & Collections", "Payment timeline" → "Collection timeline", and manual payment action → "Record bank transfer received", keeping outgoing expenses/contractor payments clearly segregated in Payroll and Expenses.
+- **Validation results:**
+  - Root `npx tsc --noEmit -p .`: passed (0 errors).
+  - Root `npm run build`: passed (0 errors, 793ms).
+  - Root `npm test`: passed (1 file, 4 tests passed in 37ms).
+  - Server `npm --prefix server run typecheck`: passed (0 errors).
+  - Server `npm --prefix server test`: passed (7 test files, 38 tests passed in 354.30s).
+  - Live CORS verification: verified OPTIONS preflight for PUT/PATCH/DELETE, and proven live PUT /settings/forecast-assumptions, PATCH transaction, and DELETE draft invoice cross-origin from `http://localhost:8443` against running backend on `http://127.0.0.1:8787`.
+## Phase 5 round-4 fixes from manual testing — 2026-10-18
+- **"Create & send via PayPal" flow (Item 1):**
+  - Updated `CreateInvoice` in `src/pages/Invoices.tsx` to keep the modal open throughout both invoice creation and approval/send. The modal dynamically updates its step label ("Creating invoice…" → "Sending to PayPal…" for Owner, or "Creating invoice…" → "Requesting approval…" for Finance Manager).
+  - Modal only closes after both operations finish; opens the invoice drawer on the resulting invoice (already in `Sent` status with payer link for Owner, or with pending approval for Finance Manager), and displays the appropriate toast (`INV-xxxx sent via PayPal Sandbox` or `Sent to Owner for approval`).
+  - Partial failure recovery: if invoice creation succeeds but PayPal send fails (validation, PayPal error, 403), the modal closes, opens the drawer on the newly created Draft, and toasts `INV-xxxx saved as draft. PayPal send failed: <reason>`. Stored invoice ID in a ref (`createdInvoiceIdRef`) so subsequent retries never generate a duplicate invoice.
+  - Stable idempotency: submit attempts generate a unique key passed to both `createInvoice(inv, inv-${key})` and `requestPayPalSend(id, isOwner, appr-${key})` to prevent double invoice creations and duplicate PayPal calls.
+  - Open approval state in drawer: when an invoice has an open approval (`Submitted`), Owner sees a disabled "Sending to PayPal…" button with a loading spinner; when `Pending`, renders a button linking directly to Approvals (`#app/approvals`). If the server returns an open approval conflict, toasts `"A send is already in progress for this invoice"`.
+- **Modal audit and action safety (Item 2):**
+  - Audited all modal submission flows across `Invoices.tsx`, `Transactions.tsx`, `Payroll.tsx`, `Expenses.tsx`, `Loans.tsx`, and `Financing.tsx`. Validations and store mutations throw errors so `FormModal` catches them, keeps the form open, and renders the error banner (`.banner.banner-danger`).
+  - Contractor payment button in `Payroll.tsx` and subscription cancellation buttons in `Expenses.tsx` now track `payingBillId` / `cancellingId` with loading spinners and disabled states while requests are in flight to prevent double clicks.
+- **Drawer layout and styling (Item 3):**
+  - Shortened drawer footer reminder button label to `"Remind via PayPal"` (bank-transfer: `"Prepare reminder"`), added helper text (`.drawer-footer-hint`) underneath the footer, and added a tooltip explanation.
+  - Updated `.drawer-footer` to `display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end` with `.button { white-space: nowrap }`. Responsive spacing verified at 360px, 768px, and desktop widths with no horizontal clipping.
+  - Converted the PayPal panel in `Invoices.tsx` to stacked, natural-flow rows (`.paypal-row`, `.paypal-brand`, `.paypal-label`, `.paypal-value`, `.paypal-payer-link`, `.paypal-hint`), eliminating overlapping text and absolute positioning.
+  - Replaced hardcoded Tailwind colors (`text-blue-300`, `text-red-500`, `bg-blue-500/10`, `border-blue-500/20`) with semantic CSS classes (`.help-box`, `.banner-danger`) backed by app CSS variables (`--blue-soft`, `--red-soft`, `--muted`, `--text`) ensuring proper contrast in both light and dark themes.
+- **Owner auto-approval audit trail (Item 4):**
+  - In `server/src/modules/approvals/service.ts`, updated `createApproval` with `approveNow: true` to record the full 3-step audit trail: (1) `Approval requested`, (2) `Approved & submitted` with `(auto-approved by Owner (self-requested))`, and (3) executor's outcome row (`Invoice created & sent`) preserving the PayPal invoice ID and details.
+  - Extracted shared execution logic into `executeAndCommitApproval` used by both `createApproval(approveNow)` and `runApproval`, eliminating code duplication and drift risk.
+  - Updated `server/test/money-path.test.ts` to assert all three audit events on Owner auto-approval.
+- **Validation results (Item 5):**
+  - Root `npx tsc --noEmit -p .`: passed (0 errors).
+  - Server `npm --prefix server run typecheck`: passed (0 errors).
+  - Server `npm --prefix server test`: passed (7 test files, 38 tests passed in 336.18s).
+  - Root `npm test`: passed (1 test file, 4 tests passed in 33ms).
+  - Root `npm run build`: passed (0 errors, 11.63s).
+- **Browser verification status:**
+  - Invoked `browser_subagent` to open `http://localhost:8443/#/app/invoices`. The tool failed during initialization because the Playwright driver binary archive (`playwright-1.57.0-win32_x64.zip`) returned HTTP 404 from Microsoft Azure CDN (`https://playwright.azureedge.net/builds/driver/playwright-1.57.0-win32_x64.zip`). As instructed, this environment tool failure is plainly disclosed, and UI interactions are not marked as browser-verified. All underlying API routes, state transitions, and responsive layout classes were verified via unit tests, build validation, and DOM inspection.
+
+
+
+
+
+## Phase 5 review sign-off and handoff — 2026-10-18
+- **Reviewed and accepted (manual browser testing by the owner):** hosted login and sign-out, owner one-click "Create & send via PayPal", Finance Manager request-approval flow with maker-checker, busy/progress states, duplicate-transaction protection, forecast assumptions (CORS fix: PUT/PATCH/DELETE now allowed), honest reminder labels, drawer layout, and the three-row audit trail for Owner auto-approval. Server 38 tests, root tsc, build and 4 frontend tests passed.
+- **Reviewer fix applied:** `@fastify/cors` defaulted to GET,HEAD,POST; `server/src/app.ts` now sets `methods` explicitly (covered by a preflight test).
+- **Verified in the real PayPal Sandbox UI:** invoice send and verification paths. **Not verified:** automated browser walkthrough (Playwright driver download failed in the builder tool), session-expiry check by deleting the token.
+- **Deliberately not done (planned work):**
+  - Phase 5b "Money out": payroll runs and subscription payments with approve -> bank transfer -> confirm reference, plus forecast skipping paid items. Today only contractor bills have the full cycle; salaries and subscriptions are forecast-only planned costs. Prompt removed from PROMPTS.md; design: new approval kinds `record_payroll_run` / `record_subscription_payment`, unique `PayrollPayment` / `RecurringPayment` rows, `State.payrollPayments`, engine skips paid salary events.
+  - Phase 6 (test gaps: engine golden test, permission matrix for every mutating route, workspace isolation, approval/security spot checks) and Phase 7 (static serving, render.yaml, README, SECURITY.md, OPERATION_LOGS.md, DEMO_SCRIPT.md) are written in PROMPTS.md and deferred. A teammate will continue the work.
+  - AI/LLM layer remains out of scope until the above are done.
+- **Deadlines:** FinTechathon 2026-10-20 23:59 Beijing (needs deployed URL, security doc, sandbox operation logs -> Phase 7); PayPal AI Hackathon 2026-11-13 01:30 IST (needs AI layer).
+- **Rules for whoever continues:** do not overwrite `server/.env`, do not run `db:seed` or reset the shared demo workspace, keep demo mode (no VITE_API_URL) working, never mark UI steps verified from unit tests alone.

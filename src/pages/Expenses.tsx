@@ -13,8 +13,9 @@ const TREND_CATEGORIES = ["Payroll", "Contractors", "Software", "Operations", "T
 const TREND_COLORS = ["#176b52", "#56ad8d", "#a86513", "#89918c", "#b84646", "#4b6b80"]
 
 export default function ExpensesPage() {
-  const { state, today, update, log, actor, toast, can, requestCancelSubscription } = useStore()
+  const { state, today, markRecurringReviewed, log, actor, toast, can, requestCancelSubscription } = useStore()
   const [adding, setAdding] = useState(false)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
   const month = monthToDate(state, today)
   const x = useMemo(() => expenseInsights(state, today), [state, today])
   const categories = Object.entries(month.current.byCategory).sort((a, b) => b[1] - a[1])
@@ -39,12 +40,9 @@ export default function ExpensesPage() {
     [state.transactions, today],
   )
 
-  const markReviewed = (r: RecurringCost) => {
-    update((d) => {
-      const target = d.recurring.find((y) => y.id === r.id)!
-      target.reviewed = true
-      if (target.status === "Review") target.status = "Active"
-    })
+  const markReviewed = async (r: RecurringCost) => {
+    const res = await markRecurringReviewed(r.id)
+    if (!res.ok) return toast(res.message)
     log({ actor, action: "Subscription reviewed", detail: `${r.vendor} kept at ${money(r.amount)}/${r.cycle === "Annual" ? "year" : "month"}`, ref: r.id, outcome: "info" })
     toast(`${r.vendor} marked as reviewed`)
   }
@@ -114,8 +112,22 @@ export default function ExpensesPage() {
                         <Button variant="ghost" disabled={!can.edit} onClick={() => markReviewed(r)}>
                           Keep
                         </Button>
-                        <Button variant="ghost" disabled={!can.prepare} onClick={() => toast(requestCancelSubscription(r.id).message)}>
-                          Cancel…
+                        <Button
+                          variant="ghost"
+                          disabled={!can.prepare || cancellingId === r.id}
+                          loading={cancellingId === r.id}
+                          onClick={async () => {
+                            if (cancellingId) return
+                            setCancellingId(r.id)
+                            try {
+                              const res = await requestCancelSubscription(r.id, state.settings.role === "Owner")
+                              toast(res.message)
+                            } finally {
+                              setCancellingId(null)
+                            }
+                          }}
+                        >
+                          {state.settings.role === "Owner" ? "Cancel subscription" : "Request approval"}
                         </Button>
                       </div>
                     )
@@ -192,7 +204,21 @@ export default function ExpensesPage() {
                     </td>
                     <td>
                       {r.status !== "Cancelled" && r.kind === "Subscription" && !pending && (
-                        <Button variant="ghost" disabled={!can.prepare} onClick={() => toast(requestCancelSubscription(r.id).message)}>
+                        <Button
+                          variant="ghost"
+                          disabled={!can.prepare || cancellingId === r.id}
+                          loading={cancellingId === r.id}
+                          onClick={async () => {
+                            if (cancellingId) return
+                            setCancellingId(r.id)
+                            try {
+                              const res = await requestCancelSubscription(r.id, state.settings.role === "Owner")
+                              toast(res.message)
+                            } finally {
+                              setCancellingId(null)
+                            }
+                          }}
+                        >
                           Cancel…
                         </Button>
                       )}
@@ -213,7 +239,7 @@ export default function ExpensesPage() {
 }
 
 function AddRecurring({ close }: { close: () => void }) {
-  const { state, today, update, log, actor, toast } = useStore()
+  const { state, today, addRecurringCost, log, actor, toast } = useStore()
   const [d, setD] = useState({ vendor: "", category: "Software" as RecurringCost["category"], amount: "", cycle: "Monthly" as RecurringCost["cycle"], nextDate: addDays(today, 7) })
   return (
     <FormModal
@@ -221,18 +247,29 @@ function AddRecurring({ close }: { close: () => void }) {
       title="Add recurring cost"
       submitLabel="Add to forecast"
       onClose={close}
-      onSubmit={() => {
+      onSubmit={async () => {
         const amount = Number(d.amount)
-        if (!d.vendor.trim() || !(amount > 0)) return toast("Enter a vendor and a positive amount")
-        const r: RecurringCost = {
-          id: `RC-${Date.now().toString(36)}`, vendor: d.vendor.trim(), category: d.category, kind: d.category === "Software" || d.category === "Marketing" ? "Subscription" : "Fixed cost",
-          amount, cycle: d.cycle, nextDate: d.nextDate, startedOn: today, status: "Active",
+        if (!d.vendor.trim() || !(amount > 0)) {
+          const msg = "Enter a vendor and a positive amount"
+          toast(msg)
+          throw new Error(msg)
         }
-        update((s) => {
-          s.recurring.push(r)
+        const res = await addRecurringCost({
+          vendor: d.vendor.trim(),
+          category: d.category,
+          kind: d.category === "Software" || d.category === "Marketing" ? "Subscription" : "Fixed cost",
+          amount,
+          cycle: d.cycle,
+          nextDate: d.nextDate,
+          startedOn: today,
+          status: "Active",
         })
-        log({ actor, action: "Recurring cost added", detail: `${r.vendor} ${money(amount)}/${d.cycle === "Annual" ? "year" : "month"} from ${fmtDay(d.nextDate)}`, ref: r.id, outcome: "info" })
-        toast(`${r.vendor} added — the forecast now includes it`)
+        if (!res.ok) {
+          toast(res.message)
+          throw new Error(res.message)
+        }
+        log({ actor, action: "Recurring cost added", detail: `${d.vendor.trim()} ${money(amount)}/${d.cycle === "Annual" ? "year" : "month"} from ${fmtDay(d.nextDate)}`, outcome: "info" })
+        toast(`${d.vendor.trim()} added — the forecast now includes it`)
         close()
       }}
     >

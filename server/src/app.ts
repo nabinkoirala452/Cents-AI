@@ -86,6 +86,8 @@ export async function buildApp() {
   await app.register(helmet)
   await app.register(cors, {
     origin: config.corsOrigins,
+    // @fastify/cors defaults to GET,HEAD,POST, which blocks every PUT/PATCH/DELETE the SPA makes cross-origin.
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
   })
   await app.register(rateLimit, {
@@ -144,7 +146,11 @@ export async function buildApp() {
       })
   })
 
-  app.get("/api/v1/health", async () => ({ status: "ok" }))
+  app.get("/api/v1/health", async () => ({
+    status: "ok",
+    paypalMode: config.paypalMode,
+    paypalEnvironment: config.paypalEnv,
+  }))
 
   installAuth(app)
   installIdempotency(app)

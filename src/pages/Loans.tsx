@@ -282,7 +282,7 @@ export default function LoansPage() {
 }
 
 function LoanForm({ close }: { close: () => void }) {
-  const { state, today, update, log, actor, toast } = useStore()
+  const { state, today, addLoan, log, actor, toast } = useStore()
   const [d, setD] = useState({ name: "", lender: "", principal: "", rate: "", tenure: "24", startDate: today, emiDay: String(Math.min(28, parseISO(today).getDate())), fee: "" })
   const emi = emiFor(Number(d.principal), Number(d.rate), Number(d.tenure))
   return (
@@ -291,16 +291,30 @@ function LoanForm({ close }: { close: () => void }) {
       title="Add loan"
       submitLabel="Add loan"
       onClose={close}
-      onSubmit={() => {
+      onSubmit={async () => {
         const principal = Number(d.principal)
         const rate = Number(d.rate)
         const tenure = Number(d.tenure)
-        if (!d.name.trim() || !d.lender.trim() || !(principal > 0) || !(rate >= 0) || !(tenure > 0)) return toast("Enter name, lender, principal, rate and tenure")
-        const loan: Loan = { id: `LN-${Date.now().toString(36)}`, name: d.name.trim(), lender: d.lender.trim(), principal, rate, tenureMonths: tenure, startDate: d.startDate, emiDay: Math.min(28, Math.max(1, Number(d.emiDay))), prepaymentFeePct: d.fee === "" ? undefined : Number(d.fee) }
-        update((s) => {
-          s.loans.push(loan)
+        if (!d.name.trim() || !d.lender.trim() || !(principal > 0) || !(rate >= 0) || !(tenure > 0)) {
+          const msg = "Enter name, lender, principal, rate and tenure"
+          toast(msg)
+          throw new Error(msg)
+        }
+        const res = await addLoan({
+          name: d.name.trim(),
+          lender: d.lender.trim(),
+          principal,
+          rate,
+          tenureMonths: tenure,
+          startDate: d.startDate,
+          emiDay: Math.min(28, Math.max(1, Number(d.emiDay))),
+          prepaymentFeePct: d.fee === "" ? undefined : Number(d.fee),
         })
-        log({ actor, action: "Loan added", detail: `${loan.name} · ${money(principal)} at ${rate}% for ${tenure} months (EMI ${money(emi)})`, ref: loan.id, outcome: "info" })
+        if (!res.ok) {
+          toast(res.message)
+          throw new Error(res.message)
+        }
+        log({ actor, action: "Loan added", detail: `${d.name.trim()} · ${money(principal)} at ${rate}% for ${tenure} months (EMI ${money(emi)})`, outcome: "info" })
         toast("Loan added — EMIs are now in the forecast")
         close()
       }}

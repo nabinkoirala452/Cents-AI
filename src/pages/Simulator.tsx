@@ -47,7 +47,7 @@ const buildMods = (state: State, today: string, type: SimType, x: Inputs, shift 
 }
 
 export default function SimulatorPage() {
-  const { state, today, update, toast, can } = useStore()
+  const { state, today, saveScenario: saveScenarioToStore, deleteScenario, toast, can } = useStore()
   const params = routeParams()
   const open = receivables(state, today).open
   const retainers = state.projects.filter((p) => p.retainer && p.status === "Active")
@@ -105,11 +105,15 @@ export default function SimulatorPage() {
     return lostProject ? `losing the ${lostProject.name} retainer (${money(lostProject.retainer?.amount ?? 0)}/month)` : "losing a retainer"
   }
 
-  const saveScenario = () => {
+  const saveScenario = async () => {
     if (!can.edit) return toast("Viewers can't save scenarios.")
-    update((d) => {
-      d.scenarios.unshift({ id: `SC-${Date.now().toString(36)}`, name: `${TYPES.find((t) => t.id === type)!.label} · ${describe()}`, createdAt: new Date().toISOString(), type, inputs: { ...x, horizon, scenario } })
+    const res = await saveScenarioToStore({
+      name: `${TYPES.find((t) => t.id === type)!.label} · ${describe()}`,
+      createdAt: new Date().toISOString(),
+      type,
+      inputs: { ...x, horizon, scenario },
     })
+    if (!res.ok) return toast(res.message)
     toast("Scenario saved")
   }
 
@@ -230,7 +234,16 @@ export default function SimulatorPage() {
                     <strong>{sc.name}</strong>
                     <small>{fmtStamp(sc.createdAt)}</small>
                   </button>
-                  <Button variant="ghost" icon={Trash2} aria-label="Delete scenario" onClick={() => update((d) => { d.scenarios = d.scenarios.filter((y) => y.id !== sc.id) })} />
+                  <Button
+                    variant="ghost"
+                    icon={Trash2}
+                    aria-label="Delete scenario"
+                    onClick={async () => {
+                      const res = await deleteScenario(sc.id)
+                      if (!res.ok) return toast(res.message)
+                      toast("Scenario deleted")
+                    }}
+                  />
                 </div>
               ))}
             </div>

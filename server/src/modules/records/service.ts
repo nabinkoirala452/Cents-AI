@@ -24,7 +24,7 @@ import type { RequestContext } from "../../plugins/auth"
 import { audit } from "../audit/service"
 
 type TransactionInput = Omit<Transaction, "id" | "status" | "source" | "invoiceId" | "reviewReason">
-type TransactionPatch = Partial<TransactionInput>
+type TransactionPatch = Partial<TransactionInput> & { status?: "Recorded" }
 type ClientInput = Omit<Client, "id" | "currency"> & { currency?: Client["currency"] }
 type ProjectInput = Omit<Project, "id">
 type EmployeeInput = Omit<Employee, "id">
@@ -393,6 +393,9 @@ export async function patchTransaction(ctx: RequestContext, transactionId: strin
         throw new HttpError(409, "verified_transaction_locked", "Verified transactions may only update category, projectId, and notes.", "Conflict")
       }
     }
+    if (patch.status && record.status !== "Review") {
+      throw new HttpError(409, "transaction_not_in_review", "Only transactions flagged for review may be confirmed as recorded.", "Conflict")
+    }
     const nextDate = patch.date ?? record.date
     if (nextDate > today) {
       throw new HttpError(400, "future_transaction_date", "Transactions can't be dated in the future.", "Bad Request")
@@ -418,7 +421,7 @@ export async function patchTransaction(ctx: RequestContext, transactionId: strin
       status: item.status,
       source: item.source === "CSVImport" ? "CSV import" : item.source === "InvoicePayment" ? "Invoice payment" : item.source,
     }))
-    const duplicate = record.status === "Verified" ? undefined : findDuplicate(candidates, duplicateFields)
+    const duplicate = record.status === "Verified" || patch.status ? undefined : findDuplicate(candidates, duplicateFields)
     await tx.transaction.update({
       where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: transactionId } },
       data: {
@@ -428,7 +431,7 @@ export async function patchTransaction(ctx: RequestContext, transactionId: strin
               status: "Review" as const,
               reviewReason: `Possible duplicate of ${duplicate.id} (${duplicate.party}, same amount within 2 days)`,
             }
-          : {}),
+          : patch.status ? { reviewReason: null } : {}),
       },
     })
     return transactionId

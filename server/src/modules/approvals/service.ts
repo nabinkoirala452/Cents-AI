@@ -263,9 +263,13 @@ export async function listApprovals(ctx: RequestContext, status?: ApprovalStatus
 
 export async function createApproval(
   ctx: RequestContext,
-  input: { kind: ApprovalKind; refId: string; draft?: string },
+  input: { kind: ApprovalKind; refId: string; draft?: string; approveNow?: boolean },
+  logger?: FastifyBaseLogger,
 ) {
   requireEdit(ctx.role)
+  if (input.approveNow && ctx.role !== "Owner") {
+    throw new HttpError(403, "forbidden_role", "Only workspace owners can auto-approve requests.", "Forbidden")
+  }
   const created = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`
       WITH approval_lock AS MATERIALIZED (
@@ -306,13 +310,18 @@ export async function createApproval(
         preparedByUserId: ctx.userId,
         preparedByAgent: false,
         requestedAt: new Date(),
-        status: "Pending",
+        status: input.approveNow ? "Submitted" : "Pending",
+        decidedBy: input.approveNow ? ctx.userName : null,
+        decidedAt: input.approveNow ? new Date() : null,
         idempotencyKey: key,
         steps: json(proposal.steps),
         draft: proposal.draft,
         payload: json(proposal.snapshot),
         payloadHash: hash,
         attempt,
+        ...(input.approveNow && input.kind === "record_contractor_payment"
+          ? { result: "Approved — transfer the money from your bank, then confirm the reference here." }
+          : {}),
       },
     })
     await audit(ctx, {
@@ -321,9 +330,29 @@ export async function createApproval(
       ref: row.id,
       outcome: "info",
     }, tx)
-    return row
+    if (input.approveNow) {
+      await audit(ctx, {
+        action: "Approved & submitted",
+        detail: `${row.title} · key ${row.idempotencyKey} (auto-approved by Owner (self-requested))`,
+        ref: row.id,
+        outcome: "success",
+      }, tx)
+    }
+    return { row, proposal }
   })
-  return responseApproval(created)
+
+  if (!input.approveNow || input.kind === "record_contractor_payment") {
+    return responseApproval(created.row)
+  }
+
+  const fallbackLogger: FastifyBaseLogger = logger ?? ({
+    info() {}, warn() {}, error() {}, debug() {}, trace() {}, fatal() {},
+    child() { return this },
+    level: "info",
+    silent() {},
+  } as unknown as FastifyBaseLogger)
+  const prepared: PreparedExecution = { approval: created.row, snapshot: created.proposal }
+  return await executeAndCommitApproval(ctx, prepared, created.row.id, fallbackLogger)
 }
 
 export async function rejectApproval(ctx: RequestContext, approvalId: string, reason: string) {
@@ -377,6 +406,9 @@ async function runApproval(
       where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: approvalId } },
     })
     if (!approval) throw new HttpError(404, "approval_not_found", "Approval was not found in this workspace.", "Not Found")
+    if (ctx.role !== "Owner" && (approval.preparedByUserId === ctx.userId || approval.preparedBy === ctx.userName)) {
+      throw new HttpError(403, "maker_checker_violation", "Finance Managers cannot approve requests they prepared themselves.", "Forbidden")
+    }
     if (retry) {
       if (
         approval.status !== "Submitted"
@@ -461,79 +493,7 @@ async function runApproval(
     return responseApproval(prepared.approval)
   }
 
-  const calls: PayPalApiCall[] = []
-  try {
-    const result = await withPayPalCallLog(logger, calls, () => executeApproval(ctx, prepared))
-    return await prisma.$transaction(async (tx) => {
-      if (result.invoiceUpdate) {
-        await tx.invoice.update({
-          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: prepared.approval.refId } },
-          data: result.invoiceUpdate,
-        })
-      }
-      if (result.reminder) {
-        const invoice = await tx.invoice.findUniqueOrThrow({
-          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: prepared.approval.refId } },
-        })
-        const reminders = invoice.reminders as Array<{ date: string; channel: string; note: string }>
-        await tx.invoice.update({
-          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: invoice.id } },
-          data: { reminders: json([...reminders, result.reminder]) },
-        })
-      }
-      if (result.cancelSubscription) {
-        await tx.recurringCost.update({
-          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: prepared.approval.refId } },
-          data: { status: "Cancelled" },
-        })
-      }
-      const updated = await tx.approval.update({
-        where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: approvalId } },
-        data: { status: "Verified", result: result.message },
-      })
-      await audit(ctx, {
-        action: result.auditAction,
-        detail: result.auditDetail,
-        ref: prepared.approval.refId,
-        outcome: "success",
-      }, tx)
-      await auditPayPalCalls(tx, {
-        workspaceId: ctx.workspaceId,
-        actor: ctx.userName,
-        actorUserId: ctx.userId,
-        requestId: ctx.requestId,
-        ref: prepared.approval.refId,
-        calls,
-      })
-      return responseApproval(updated)
-    })
-  } catch (error) {
-    const safeMessage = error instanceof PayPalError
-      ? `${error.message}${error.debugId ? ` · debug_id ${error.debugId}` : ""}`
-      : error instanceof Error ? error.message : "Execution failed"
-    const failed = await prisma.$transaction(async (tx) => {
-      const updated = await tx.approval.update({
-        where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: approvalId } },
-        data: { status: "Failed", result: safeMessage },
-      })
-      await audit(ctx, {
-        action: "Execution failed",
-        detail: `${prepared.approval.title}: ${safeMessage}`,
-        ref: approvalId,
-        outcome: "error",
-      }, tx)
-      await auditPayPalCalls(tx, {
-        workspaceId: ctx.workspaceId,
-        actor: ctx.userName,
-        actorUserId: ctx.userId,
-        requestId: ctx.requestId,
-        ref: prepared.approval.refId,
-        calls,
-      })
-      return updated
-    })
-    return responseApproval(failed)
-  }
+  return await executeAndCommitApproval(ctx, prepared, approvalId, logger)
 }
 
 export function approveApproval(ctx: RequestContext, approvalId: string, logger: FastifyBaseLogger) {
@@ -672,6 +632,87 @@ async function executeApproval(ctx: RequestContext, prepared: PreparedExecution)
     auditAction: "Subscription cancelled",
     auditDetail: `${approval.recipient} removed from the forecast`,
     cancelSubscription: true,
+  }
+}
+
+async function executeAndCommitApproval(
+  ctx: RequestContext,
+  prepared: PreparedExecution,
+  approvalId: string,
+  logger: FastifyBaseLogger,
+) {
+  const calls: PayPalApiCall[] = []
+  try {
+    const result = await withPayPalCallLog(logger, calls, () => executeApproval(ctx, prepared))
+    return await prisma.$transaction(async (tx) => {
+      if (result.invoiceUpdate) {
+        await tx.invoice.update({
+          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: prepared.approval.refId } },
+          data: result.invoiceUpdate,
+        })
+      }
+      if (result.reminder) {
+        const invoice = await tx.invoice.findUniqueOrThrow({
+          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: prepared.approval.refId } },
+        })
+        const reminders = invoice.reminders as Array<{ date: string; channel: string; note: string }>
+        await tx.invoice.update({
+          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: invoice.id } },
+          data: { reminders: json([...reminders, result.reminder]) },
+        })
+      }
+      if (result.cancelSubscription) {
+        await tx.recurringCost.update({
+          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: prepared.approval.refId } },
+          data: { status: "Cancelled" },
+        })
+      }
+      const updated = await tx.approval.update({
+        where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: approvalId } },
+        data: { status: "Verified", result: result.message },
+      })
+      await audit(ctx, {
+        action: result.auditAction,
+        detail: result.auditDetail,
+        ref: prepared.approval.refId,
+        outcome: "success",
+      }, tx)
+      await auditPayPalCalls(tx, {
+        workspaceId: ctx.workspaceId,
+        actor: ctx.userName,
+        actorUserId: ctx.userId,
+        requestId: ctx.requestId,
+        ref: prepared.approval.refId,
+        calls,
+      })
+      return responseApproval(updated)
+    })
+  } catch (error) {
+    const safeMessage = error instanceof PayPalError
+      ? `${error.message}${error.debugId ? ` · debug_id ${error.debugId}` : ""}`
+      : error instanceof Error ? error.message : "Execution failed"
+    const failed = await prisma.$transaction(async (tx) => {
+      const updated = await tx.approval.update({
+        where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: approvalId } },
+        data: { status: "Failed", result: safeMessage },
+      })
+      await audit(ctx, {
+        action: "Execution failed",
+        detail: `${prepared.approval.title}: ${safeMessage}`,
+        ref: approvalId,
+        outcome: "error",
+      }, tx)
+      await auditPayPalCalls(tx, {
+        workspaceId: ctx.workspaceId,
+        actor: ctx.userName,
+        actorUserId: ctx.userId,
+        requestId: ctx.requestId,
+        ref: prepared.approval.refId,
+        calls,
+      })
+      return updated
+    })
+    return responseApproval(failed)
   }
 }
 

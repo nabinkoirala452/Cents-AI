@@ -154,7 +154,7 @@ export default function CashFlowPage() {
 }
 
 function AssumptionsModal({ close }: { close: () => void }) {
-  const { state, update, log, actor, toast, can } = useStore()
+  const { state, saveAssumptions, log, actor, toast, can } = useStore()
   const open = state.invoices.filter((i) => i.status === "Sent")
   const [threshold, setThreshold] = useState(state.settings.safetyThreshold)
   const [overrides, setOverrides] = useState<Record<string, string>>(
@@ -167,16 +167,16 @@ function AssumptionsModal({ close }: { close: () => void }) {
       submitLabel="Apply to forecast"
       wide
       onClose={close}
-      onSubmit={() => {
+      onSubmit={async () => {
         if (!can.edit) return toast("Viewers can't change assumptions.")
-        update((d) => {
-          d.settings.safetyThreshold = Math.max(0, threshold)
-          for (const inv of d.invoices) {
-            if (!(inv.id in overrides)) continue
-            const v = overrides[inv.id]
-            inv.expectedDelayOverride = v === "" ? undefined : Math.max(0, Number(v))
-          }
-        })
+        const invoiceOverrides = open
+          .filter((inv) => inv.id in overrides)
+          .map((inv) => ({
+            id: inv.id,
+            expectedDelayOverride: overrides[inv.id] === "" ? null : Math.max(0, Number(overrides[inv.id])),
+          }))
+        const res = await saveAssumptions(Math.max(0, threshold), invoiceOverrides)
+        if (!res.ok) return toast(res.message)
         log({ actor, action: "Assumptions updated", detail: `Threshold ${money(threshold, state.settings.currency)} · ${Object.values(overrides).filter(Boolean).length} receipt overrides`, outcome: "info" })
         toast("Forecast recalculated with your assumptions")
         close()

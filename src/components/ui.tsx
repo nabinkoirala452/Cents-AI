@@ -1,18 +1,49 @@
-import { useEffect } from "react"
-import { ArrowUpRight, X, type LucideIcon } from "lucide-react"
+import { useEffect, useState, useCallback } from "react"
+import { ArrowUpRight, Loader2, X, type LucideIcon } from "lucide-react"
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary" | "ghost" | "danger"
   icon?: LucideIcon
+  loading?: boolean
 }
 
-export function Button({ variant = "secondary", icon: Icon, className = "", children, type = "button", ...props }: ButtonProps) {
+export function Button({ variant = "secondary", icon: Icon, loading, disabled, className = "", children, type = "button", ...props }: ButtonProps) {
+  const IconComponent = loading ? Loader2 : Icon
   return (
-    <button type={type} className={`button button-${variant} ${className}`} {...props}>
-      {Icon && <Icon size={15} />}
+    <button
+      type={type}
+      disabled={disabled || loading}
+      className={`button button-${variant} ${loading ? "loading" : ""} ${className}`}
+      {...props}
+    >
+      {IconComponent && <IconComponent size={15} className={loading ? "animate-spin" : undefined} />}
       {children}
     </button>
   )
+}
+
+export function useAction<T extends unknown[], R = void>(
+  fn: (...args: T) => Promise<R> | R,
+  onError?: (err: unknown) => void,
+) {
+  const [busy, setBusy] = useState(false)
+  const run = useCallback(
+    async (...args: T): Promise<R | undefined> => {
+      if (busy) return undefined
+      setBusy(true)
+      try {
+        return await fn(...args)
+      } catch (err) {
+        if (onError) onError(err)
+        else console.error(err)
+        return undefined
+      } finally {
+        setBusy(false)
+      }
+    },
+    [busy, fn, onError],
+  )
+  return { run, busy }
 }
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
@@ -139,39 +170,86 @@ export function Modal({ children, onClose, className = "" }: { children: React.R
   )
 }
 
-export function FormModal({ eyebrow, title, onClose, onSubmit, children, submitLabel, wide }: {
+export function FormModal({
+  eyebrow,
+  title,
+  onClose,
+  onSubmit,
+  children,
+  submitLabel,
+  busyLabel,
+  wide,
+}: {
   eyebrow: string
   title: string
   onClose: () => void
-  onSubmit: () => void
+  onSubmit: ((setStep: (label: string) => void) => Promise<void | boolean> | void | boolean) | (() => Promise<void | boolean> | void | boolean)
   children: React.ReactNode
   submitLabel: string
+  busyLabel?: string
   wide?: boolean
 }) {
-  useEscape(onClose)
+  const [busy, setBusy] = useState(false)
+  const [stepLabel, setStepLabel] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEscape(() => {
+    if (!busy) onClose()
+  })
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    setStepLabel(null)
+    try {
+      await onSubmit((label: string) => setStepLabel(label))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(msg)
+    } finally {
+      setBusy(false)
+      setStepLabel(null)
+    }
+  }
+
+  const defaultBusy = submitLabel.toLowerCase().startsWith("create")
+    ? submitLabel.replace(/^create/i, "Creating") + "…"
+    : submitLabel.toLowerCase().startsWith("save")
+    ? "Saving…"
+    : submitLabel.toLowerCase().startsWith("import")
+    ? "Importing…"
+    : `${submitLabel}…`
+  const activeBusyLabel = stepLabel ?? busyLabel ?? defaultBusy
+
   return (
-    <div className="modal-shell" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-shell" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <form
         className={`modal form-modal ${wide ? "import-modal" : ""}`}
         role="dialog"
         aria-modal="true"
-        onSubmit={(e) => {
-          e.preventDefault()
-          onSubmit()
-        }}
+        onSubmit={handleSubmit}
       >
         <div className="form-modal-head">
           <div>
             <span className="eyebrow">{eyebrow}</span>
             <Title level={2}>{title}</Title>
           </div>
-          <Button variant="ghost" icon={X} aria-label="Close" onClick={onClose} />
+          <Button variant="ghost" icon={X} aria-label="Close" disabled={busy} onClick={() => !busy && onClose()} />
         </div>
+        {error && (
+          <div className="banner banner-danger" role="alert">
+            {error}
+          </div>
+        )}
         {children}
         <div className="modal-actions">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" type="submit">
-            {submitLabel}
+          <Button disabled={busy} onClick={() => !busy && onClose()}>
+            Cancel
+          </Button>
+          <Button variant="primary" type="submit" loading={busy} disabled={busy}>
+            {busy ? activeBusyLabel : submitLabel}
           </Button>
         </div>
       </form>

@@ -24,6 +24,7 @@ logs/
 
 # Local tool config
 .claude/
+.tsupgrader/
 
 # Keep env templates
 !.env.example

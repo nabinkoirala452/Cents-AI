@@ -20,6 +20,7 @@ const createBody = z.object({
   ]),
   refId: z.string().trim().min(1).max(100),
   draft: z.string().max(2000).optional(),
+  approveNow: z.boolean().optional(),
 }).strict().superRefine((value, context) => {
   if (value.draft !== undefined && value.kind !== "send_reminder") {
     context.addIssue({
@@ -44,7 +45,7 @@ export function registerApprovalRoutes(app: FastifyInstance): void {
     listApprovals(requireContext(request), listQuery.parse(request.query).status),
   )
   app.post("/api/v1/approvals", { schema: { body: createBody } }, async (request) =>
-    createApproval(requireContext(request), createBody.parse(request.body)),
+    createApproval(requireContext(request), createBody.parse(request.body), request.log),
   )
   app.post("/api/v1/approvals/:id/approve", {
     schema: { params: idParams, body: noBody },

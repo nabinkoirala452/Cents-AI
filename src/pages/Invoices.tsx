@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react"
-import { AlertTriangle, Check, Clock3, ExternalLink, Mail, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Trash2 } from "lucide-react"
+import { useMemo, useRef, useState } from "react"
+import { AlertTriangle, Check, Clock3, Copy, ExternalLink, Mail, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Trash2 } from "lucide-react"
 import { InvoiceRows } from "../components/finance-ui"
-import { Badge, Button, Card, Drawer, Field, FormModal, Input, MetricCard, Note, Select, Tabs, Textarea, Title } from "../components/ui"
+import { Badge, Button, Card, Drawer, Field, FormModal, Input, MetricCard, Modal, Note, Select, Tabs, Textarea, Title, useAction } from "../components/ui"
 import { addDays, fmtDate, fmtDay, fmtStamp, relativeDue } from "../lib/dates"
 import { draftReminder, type ReminderTone } from "../lib/drafts"
 import { buildEvents, clientOf, invoiceState, invoiceTotal, projectOf, receivables, stateTone } from "../lib/finance"
@@ -15,7 +15,7 @@ const TABS = ["All", "Overdue", "Due soon", "Open", "Paid", "Draft"] as const
 type Tab = (typeof TABS)[number]
 
 export default function InvoicesPage() {
-  const { state, today } = useStore()
+  const { state, today, mode, paypalMode, paypalEnvironment } = useStore()
   const params = routeParams()
   const [tab, setTab] = useState<Tab>((TABS as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : "All")
   const [query, setQuery] = useState("")
@@ -45,7 +45,7 @@ export default function InvoicesPage() {
     <div className="page">
       <div className="page-intro">
         <div>
-          <Title>Invoices & Payments</Title>
+          <Title>Invoices & Collections</Title>
           <p>Bill clients, prioritise collections, and verify payments before they reach your ledger.</p>
         </div>
         <div className="intro-actions">
@@ -55,7 +55,7 @@ export default function InvoicesPage() {
         </div>
       </div>
       <div className="demo-note">
-        <ShieldCheck size={14} /> PayPal {PAYPAL_MODE} or bank transfer · Ledger updates only after verification or a recorded bank reference.
+        <ShieldCheck size={14} /> PayPal {mode === "hosted" ? `${paypalEnvironment} (${paypalMode})` : PAYPAL_MODE} or bank transfer · Ledger updates only after verification or a recorded bank reference.
       </div>
       <div className="metric-grid">
         <MetricCard label="Total Outstanding" value={money(rec.outstanding)} detail={`Across ${rec.open.length} open invoices`} />
@@ -88,25 +88,96 @@ export default function InvoicesPage() {
 
 function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
   const store = useStore()
-  const { state, today, toast, can } = store
+  const { state, today, toast, can, mode, paypalEnvironment } = store
   const client = clientOf(state, inv.clientId)
   const project = projectOf(state, inv.projectId)
   const st = invoiceState(inv, today)
   const total = invoiceTotal(inv)
-  const [busy, setBusy] = useState("")
   const [modal, setModal] = useState<"remind" | "record" | null>(null)
+  const [confirmSend, setConfirmSend] = useState(false)
+  const [confirm24hReminder, setConfirm24hReminder] = useState(false)
   const eligibility = paypalEligibility(inv, client)
   const pending = state.approvals.find((a) => a.refId === inv.id && (a.status === "Pending" || a.status === "Submitted"))
   const expected = buildEvents(state, today, 120, "expected").find((e) => e.ref === inv.id)
   const conservative = buildEvents(state, today, 120, "conservative").find((e) => e.ref === inv.id)
   const events = state.audit.filter((a) => a.ref === inv.id).reverse()
 
-  const run = async (label: string, fn: () => Promise<{ ok: boolean; message: string }> | { ok: boolean; message: string }) => {
-    setBusy(label)
-    const res = await fn()
-    setBusy("")
+  const role = state.settings.role
+  const isOwner = role === "Owner"
+  const isFinanceManager = role === "Finance Manager"
+  const isViewer = role === "Viewer"
+
+  const lastReminder = inv.reminders.length > 0 ? inv.reminders[inv.reminders.length - 1] : null
+  const isWithin24h = Boolean(lastReminder && lastReminder.date >= today)
+
+  const deleteDraftAction = useAction(async () => {
+    const res = await store.deleteInvoice(inv.id)
+    if (!res.ok) {
+      toast(res.message)
+      throw new Error(res.message)
+    }
+    store.log({ actor: store.actor, action: "Draft deleted", detail: inv.id, ref: inv.id, outcome: "info" })
+    close()
+    toast(`${inv.id} draft deleted`)
+  })
+
+  const markSentAction = useAction(async () => {
+    const res = await store.markSentManually(inv.id)
     toast(res.message)
+    if (!res.ok) throw new Error(res.message)
+  })
+
+  const verifyPayPalAction = useAction(async () => {
+    const res = await store.checkPayPalStatus(inv.id)
+    toast(res.message)
+    if (!res.ok) throw new Error(res.message)
+  })
+
+  const requestApprovalAction = useAction(async () => {
+    const res = await store.requestPayPalSend(inv.id, false)
+    if (!res.ok) {
+      if (/already\s+(open|in approval|in progress)/i.test(res.message)) {
+        toast("A send is already in progress for this invoice")
+      } else {
+        toast(res.message)
+      }
+      throw new Error(res.message)
+    }
+    toast(res.message)
+  })
+
+  const ownerSendAction = useAction(async () => {
+    const res = await store.requestPayPalSend(inv.id, true)
+    if (!res.ok) {
+      if (/already\s+(open|in approval|in progress)/i.test(res.message)) {
+        toast("A send is already in progress for this invoice")
+      } else {
+        toast(res.message)
+      }
+      setConfirmSend(false)
+      throw new Error(res.message)
+    }
+    toast(`${inv.id} sent via PayPal Sandbox`)
+    setConfirmSend(false)
+  })
+
+  const handleReminderClick = () => {
+    if (isWithin24h) {
+      if (!isOwner) {
+        toast("A reminder was already recorded today. Second reminders within 24 hours require Owner confirmation.")
+        return
+      }
+      setConfirm24hReminder(true)
+      return
+    }
+    setModal("remind")
   }
+
+  const reminderButtonText = pending?.kind === "send_reminder"
+    ? "Reminder awaiting approval"
+    : inv.paypal
+    ? "Remind via PayPal"
+    : "Prepare reminder"
 
   const timeline = [
     { label: "Invoice created", date: fmtDate(inv.issueDate), done: true },
@@ -115,6 +186,9 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
     ...events.filter((e) => /verified|checked|recorded|paid/i.test(e.action)).map((e) => ({ label: e.action, date: `${fmtStamp(e.at)} · ${e.actor}`, done: e.outcome === "success" })),
     ...(inv.status === "Paid" ? [] : [{ label: "Payment verified", date: "Waiting", done: false }]),
   ]
+
+  const approvedReminder = state.approvals.find((a) => a.refId === inv.id && a.kind === "send_reminder" && (a.status === "Verified" || a.status === "Submitted"))
+  const savedReminderDraft = approvedReminder?.draft ?? (lastReminder?.channel?.includes("Email draft") ? lastReminder.note : null)
 
   return (
     <Drawer
@@ -128,24 +202,53 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
               <Button
                 variant="ghost"
                 icon={Trash2}
-                disabled={!can.edit}
-                onClick={() => {
-                  store.update((d) => {
-                    d.invoices = d.invoices.filter((i) => i.id !== inv.id)
-                  })
-                  store.log({ actor: store.actor, action: "Draft deleted", detail: inv.id, ref: inv.id, outcome: "info" })
-                  close()
-                  toast(`${inv.id} draft deleted`)
-                }}
+                disabled={!can.edit || deleteDraftAction.busy}
+                loading={deleteDraftAction.busy}
+                onClick={() => deleteDraftAction.run()}
               >
                 Delete draft
               </Button>
               {eligibility.ok ? (
-                <Button variant="primary" icon={Send} disabled={!!pending} onClick={() => run("send", () => store.requestPayPalSend(inv.id))}>
-                  {pending ? `${pending.id} awaiting approval` : "Send via PayPal"}
-                </Button>
+                pending?.status === "Submitted" ? (
+                  <Button variant="primary" loading disabled>
+                    Sending to PayPal…
+                  </Button>
+                ) : pending?.status === "Pending" ? (
+                  <a href="#app/approvals" className="button button-secondary">
+                    Awaiting approval {pending.id}
+                  </a>
+                ) : isOwner ? (
+                  <Button
+                    variant="primary"
+                    icon={Send}
+                    disabled={ownerSendAction.busy}
+                    loading={ownerSendAction.busy}
+                    onClick={() => setConfirmSend(true)}
+                  >
+                    Send via PayPal
+                  </Button>
+                ) : isFinanceManager ? (
+                  <Button
+                    variant="primary"
+                    icon={Send}
+                    disabled={requestApprovalAction.busy}
+                    loading={requestApprovalAction.busy}
+                    onClick={() => requestApprovalAction.run()}
+                  >
+                    Request approval from Owner
+                  </Button>
+                ) : (
+                  <Button variant="primary" icon={Send} disabled={true}>
+                    Send via PayPal
+                  </Button>
+                )
               ) : (
-                <Button variant="primary" onClick={() => run("issue", () => store.markSentManually(inv.id))}>
+                <Button
+                  variant="primary"
+                  disabled={!can.edit || markSentAction.busy}
+                  loading={markSentAction.busy}
+                  onClick={() => markSentAction.run()}
+                >
                   Mark as sent
                 </Button>
               )}
@@ -153,18 +256,34 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
           )}
           {inv.status === "Sent" && (
             <>
-              <Button icon={Mail} disabled={!!pending} onClick={() => setModal("remind")}>
-                {pending?.kind === "send_reminder" ? "Reminder awaiting approval" : "Draft reminder"}
+              <Button
+                icon={Mail}
+                title={inv.paypal ? "PayPal emails the client directly" : "Prepare reminder draft"}
+                disabled={isViewer || !!pending}
+                onClick={handleReminderClick}
+              >
+                {reminderButtonText}
               </Button>
               {inv.paypal ? (
-                <Button variant="primary" icon={RefreshCw} disabled={busy === "check"} onClick={() => run("check", () => store.checkPayPalStatus(inv.id))}>
-                  {busy === "check" ? "Checking PayPal…" : "Verify payment status"}
+                <Button
+                  variant="primary"
+                  icon={RefreshCw}
+                  disabled={verifyPayPalAction.busy}
+                  loading={verifyPayPalAction.busy}
+                  onClick={() => verifyPayPalAction.run()}
+                >
+                  Verify payment status
                 </Button>
               ) : (
                 <Button variant="primary" icon={Check} disabled={!can.edit} onClick={() => setModal("record")}>
-                  Record payment
+                  Record bank transfer received
                 </Button>
               )}
+              <div className="drawer-footer-hint">
+                {inv.paypal
+                  ? "PayPal emails the client directly."
+                  : "Prepare a reminder draft to copy or send via email."}
+              </div>
             </>
           )}
         </>
@@ -183,6 +302,11 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
           {client.email} · {client.country} · usually pays {client.avgDelayDays === 0 ? "on time" : `${client.avgDelayDays} days late`}
         </small>
       </div>
+
+      <div className="help-box">
+        You are billing {client.name}. They pay you. Status becomes Paid only after PayPal confirms or you record the bank reference.
+      </div>
+
       <div className="detail-grid">
         <div>
           <span>Issued</span>
@@ -203,6 +327,49 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
           <strong>{inv.currency} · {inv.channel === "PayPal" ? "PayPal" : "Bank transfer"}</strong>
         </div>
       </div>
+
+      {lastReminder && (
+        <div className="detail-section">
+          <span className="eyebrow">LAST REMINDER</span>
+          <strong>{fmtDate(lastReminder.date)} ({lastReminder.channel})</strong>
+          <small>{lastReminder.note}</small>
+        </div>
+      )}
+
+      {!inv.paypal && savedReminderDraft && (
+        <div className="detail-section">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span className="eyebrow">SAVED REMINDER DRAFT</span>
+            <small className="muted">Email draft (not sent)</small>
+          </div>
+          <p className="section-note" style={{ margin: "4px 0" }}>
+            CentsAI doesn't send email in this prototype.
+          </p>
+          <div className="help-box" style={{ whiteSpace: "pre-wrap", maxHeight: "140px", overflowY: "auto", fontSize: "11px" }}>
+            {savedReminderDraft}
+          </div>
+          <div style={{ display: "flex", gap: "8px", paddingTop: "4px" }}>
+            <Button
+              variant="secondary"
+              icon={Copy}
+              onClick={() => {
+                navigator.clipboard.writeText(savedReminderDraft)
+                toast("Reminder text copied to clipboard")
+              }}
+            >
+              Copy text
+            </Button>
+            <a
+              href={`mailto:${client.email}?subject=${encodeURIComponent(`Payment reminder: Invoice ${inv.id}`)}&body=${encodeURIComponent(savedReminderDraft)}`}
+              className="button button-secondary"
+            >
+              Open in email app
+              <ExternalLink size={12} />
+            </a>
+          </div>
+        </div>
+      )}
+
       <div className="line-items">
         {inv.lineItems.map((item, i) => (
           <div className="line-item" key={i}>
@@ -219,21 +386,38 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
 
       {inv.paypal && (
         <div className="paypal-panel">
-          <div className="paypal-head">
-            <span className="paypal-mark">P</span>
-            <div>
-              <strong>PayPal Sandbox</strong>
-              <small>{inv.paypal.invoiceId}</small>
+          <div className="paypal-row paypal-row-title">
+            <div className="paypal-brand">
+              <span className="paypal-mark">P</span>
+              <strong>PayPal {mode === "hosted" ? paypalEnvironment : "Sandbox"}</strong>
             </div>
             <Badge tone={inv.paypal.status === "PAID" ? "green" : "blue"}>{inv.paypal.status}</Badge>
           </div>
-          <div className="paypal-meta">
-            <span>Last verified {inv.paypal.lastCheckedAt ? fmtStamp(inv.paypal.lastCheckedAt) : "never"}</span>
-            <a href={inv.paypal.payerUrl} target="_blank" rel="noreferrer">
+
+          <div className="paypal-row">
+            <span className="paypal-label">PayPal Invoice ID</span>
+            <span className="paypal-value font-mono">{inv.paypal.invoiceId}</span>
+          </div>
+
+          <div className="paypal-row">
+            <span className="paypal-label">Last verified</span>
+            <span className="paypal-value">{inv.paypal.lastCheckedAt ? fmtStamp(inv.paypal.lastCheckedAt) : "never"}</span>
+          </div>
+
+          <div className="paypal-row">
+            <span className="paypal-label">Payment link</span>
+            <a href={inv.paypal.payerUrl} target="_blank" rel="noreferrer" className="paypal-payer-link">
               Payer link <ExternalLink size={11} />
             </a>
           </div>
-          {inv.status === "Sent" && (
+
+          {inv.status === "Sent" && mode === "hosted" && (
+            <p className="paypal-hint">
+              Pay it in the PayPal sandbox with your sandbox personal account, then click Verify payment status.
+            </p>
+          )}
+
+          {inv.status === "Sent" && mode === "demo" && (
             <div className="sandbox-tools">
               <span>
                 <Clock3 size={12} /> Sandbox test tool
@@ -285,7 +469,7 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
       )}
 
       <div className="timeline">
-        <Title level={3}>Payment timeline</Title>
+        <Title level={3}>Collection timeline</Title>
         {timeline.map((row, i) => (
           <div className="timeline-row" key={row.label + i}>
             <span className={row.done ? "done" : ""} />
@@ -297,6 +481,47 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
         ))}
       </div>
 
+      {confirmSend && (
+        <Modal onClose={() => !ownerSendAction.busy && setConfirmSend(false)}>
+          <div className="p-4 space-y-3">
+            <Title level={2}>Send via PayPal Sandbox</Title>
+            <div className="space-y-1 text-sm my-3">
+              <div><span className="text-muted">Recipient:</span> <strong>{client.name}</strong></div>
+              <div><span className="text-muted">Amount:</span> <strong>{money(total, inv.currency)} {inv.currency}</strong></div>
+              <p className="text-xs text-muted-foreground mt-2">
+                This sends a real PayPal Sandbox invoice to <strong>{client.email}</strong>.
+              </p>
+            </div>
+            <div className="modal-actions">
+              <Button disabled={ownerSendAction.busy} onClick={() => setConfirmSend(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" icon={Send} loading={ownerSendAction.busy} disabled={ownerSendAction.busy} onClick={() => ownerSendAction.run()}>
+                Send via PayPal
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {confirm24hReminder && (
+        <Modal onClose={() => setConfirm24hReminder(false)}>
+          <div className="p-4 space-y-3">
+            <Title level={2}>Send second reminder within 24 hours?</Title>
+            <p className="text-sm my-3">
+              A reminder was already recorded on <strong>{lastReminder ? fmtDate(lastReminder.date) : "today"}</strong> ({lastReminder?.channel}).
+              As workspace Owner, confirm you want to proceed with another reminder within 24 hours.
+            </p>
+            <div className="modal-actions">
+              <Button onClick={() => setConfirm24hReminder(false)}>Cancel</Button>
+              <Button variant="primary" onClick={() => { setConfirm24hReminder(false); setModal("remind") }}>
+                Confirm & proceed
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {modal === "remind" && <ReminderModal inv={inv} close={() => setModal(null)} />}
       {modal === "record" && <RecordPaymentModal inv={inv} close={() => setModal(null)} />}
     </Drawer>
@@ -304,20 +529,27 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
 }
 
 function ReminderModal({ inv, close }: { inv: Invoice; close: () => void }) {
-  const { state, today, prepareReminder, toast } = useStore()
+  const { state, today, prepareReminder, toast, mode } = useStore()
   const client = clientOf(state, inv.clientId)
+  const isOwner = state.settings.role === "Owner"
   const [tone, setTone] = useState<ReminderTone>(inv.reminders.length ? "Firm" : "Friendly")
   const [text, setText] = useState(() => draftReminder(inv, client, state.settings, today, tone))
+
+  const submitLabel = isOwner
+    ? (inv.paypal ? "Send reminder via PayPal" : "Save reminder draft")
+    : "Request approval from Owner"
+
   return (
     <FormModal
       eyebrow="AI-DRAFTED REMINDER"
       title={`Reminder for ${inv.id}`}
-      submitLabel="Request approval to send"
+      submitLabel={submitLabel}
       onClose={close}
-      onSubmit={() => {
-        const res = prepareReminder(inv.id, { draft: text, tone })
+      onSubmit={async () => {
+        const res = await prepareReminder(inv.id, { draft: text, tone, approveNow: isOwner })
         toast(res.message)
         if (res.ok) close()
+        else throw new Error(res.message)
       }}
     >
       <div className="form-grid">
@@ -336,14 +568,16 @@ function ReminderModal({ inv, close }: { inv: Invoice; close: () => void }) {
           </Select>
         </Field>
         <Field label="Delivery">
-          <Input readOnly value={inv.paypal ? "PayPal reminder (Sandbox)" : `Email to ${client.email}`} />
+          <Input readOnly value={inv.paypal ? `PayPal reminder (${mode === "hosted" ? "PayPal Sandbox" : "Sandbox"})` : `Email draft (CentsAI doesn't send email in this prototype)`} />
         </Field>
         <Field label="Message" full>
           <Textarea rows={10} value={text} onChange={(e) => setText(e.target.value)} />
         </Field>
       </div>
       <p className="section-note form-note">
-        Previous reminders: {inv.reminders.length || "none"}. Nothing is sent until an authorised person approves it in Approvals & Audit.
+        {inv.paypal
+          ? "PayPal will email the client directly."
+          : "CentsAI doesn't send email in this prototype. Saving this draft lets you copy the text and send it from your email client."}
       </p>
     </FormModal>
   )
@@ -356,13 +590,14 @@ function RecordPaymentModal({ inv, close }: { inv: Invoice; close: () => void })
   return (
     <FormModal
       eyebrow="BANK TRANSFER RECEIVED"
-      title={`Record payment · ${inv.id}`}
-      submitLabel="Record payment"
+      title={`Record bank transfer received · ${inv.id}`}
+      submitLabel="Record bank transfer"
       onClose={close}
-      onSubmit={() => {
-        const res = recordManualPayment(inv.id, date, reference)
+      onSubmit={async () => {
+        const res = await recordManualPayment(inv.id, date, reference)
         toast(res.message)
         if (res.ok) close()
+        else throw new Error(res.message)
       }}
     >
       <div className="form-grid">
@@ -381,7 +616,7 @@ function RecordPaymentModal({ inv, close }: { inv: Invoice; close: () => void })
 }
 
 function CreateInvoice({ close, onCreated }: { close: () => void; onCreated: (id: string) => void }) {
-  const { state, today, update, log, actor, toast, can, requestPayPalSend } = useStore()
+  const { state, today, update, log, actor, toast, can, mode, paypalEnvironment, createInvoice, requestPayPalSend } = useStore()
   const [clientId, setClientId] = useState(state.clients[0].id)
   const client = clientOf(state, clientId)
   const projects = state.projects.filter((p) => p.clientId === clientId)
@@ -392,36 +627,119 @@ function CreateInvoice({ close, onCreated }: { close: () => void; onCreated: (id
   const [terms, setTerms] = useState(15)
   const [items, setItems] = useState<LineItem[]>([{ description: "", quantity: 1, unitPrice: 0 }])
   const [sendNow, setSendNow] = useState(true)
+  const submitKeyRef = useRef<string | null>(null)
+  if (!submitKeyRef.current) {
+    submitKeyRef.current = Math.random().toString(36).slice(2) + Date.now().toString(36)
+  }
+  const createdInvoiceIdRef = useRef<string | null>(null)
+
   const total = items.reduce((s, i) => s + i.quantity * i.unitPrice, 0)
   const nextId = `INV-${Math.max(...state.invoices.map((i) => Number(i.id.replace(/\D/g, "")) || 0)) + 1}`
   const setItem = (index: number, patch: Partial<LineItem>) => setItems(items.map((it, i) => (i === index ? { ...it, ...patch } : it)))
+
+  const isOwner = state.settings.role === "Owner"
+  const submitLabel = channel === "PayPal" && sendNow
+    ? (isOwner ? "Create & send via PayPal" : "Create & request approval")
+    : "Save draft"
 
   return (
     <FormModal
       eyebrow="NEW CLIENT INVOICE"
       title={`Create ${nextId}`}
-      submitLabel={channel === "PayPal" && sendNow ? "Create & request PayPal send" : "Save draft"}
+      submitLabel={submitLabel}
       wide
       onClose={close}
-      onSubmit={() => {
-        if (!can.edit) return toast("Viewers can't create invoices.")
+      onSubmit={async (setStep) => {
+        if (!can.edit) {
+          toast("Viewers can't create invoices.")
+          throw new Error("Viewers can't create invoices.")
+        }
         const clean = items.filter((i) => i.description.trim() && i.quantity > 0 && i.unitPrice > 0)
-        if (!clean.length) return toast("Add at least one line item with a description and a positive amount.")
+        if (!clean.length) {
+          const msg = "Add at least one line item with a description and a positive amount."
+          toast(msg)
+          throw new Error(msg)
+        }
         const inv: Invoice = {
           id: nextId, clientId, projectId: projectId || undefined, kind, issueDate, dueDate: addDays(issueDate, terms),
           currency: state.settings.currency, lineItems: clean, status: "Draft", channel, reminders: [],
         }
-        update((d) => {
-          d.invoices.unshift(inv)
-        })
-        log({ actor, action: "Invoice drafted", detail: `${inv.id} · ${client.name} · ${money(total, client.currency)}`, ref: inv.id, outcome: "info" })
-        close()
+
+        if (mode === "demo") {
+          setStep?.("Creating invoice…")
+          let id = createdInvoiceIdRef.current
+          if (!id) {
+            update((d) => {
+              d.invoices.unshift(inv)
+            })
+            log({ actor, action: "Invoice drafted", detail: `${inv.id} · ${client.name} · ${money(total, client.currency)}`, ref: inv.id, outcome: "info" })
+            id = inv.id
+            createdInvoiceIdRef.current = id
+          }
+          if (channel === "PayPal" && sendNow) {
+            setStep?.(isOwner ? "Sending to PayPal…" : "Requesting approval…")
+            const result = await requestPayPalSend(id, isOwner)
+            if (!result.ok) {
+              close()
+              onCreated(id)
+              toast(`${id} saved as draft. PayPal send failed: ${result.message}`)
+              return
+            }
+            close()
+            onCreated(id)
+            if (isOwner) {
+              toast(`${id} sent via PayPal Sandbox`)
+            } else {
+              toast("Sent to Owner for approval")
+            }
+          } else {
+            close()
+            onCreated(id)
+            toast(`${id} saved as draft`)
+          }
+          return
+        }
+
+        // Hosted mode
+        setStep?.("Creating invoice…")
+        let id = createdInvoiceIdRef.current
+        if (!id) {
+          try {
+            id = await createInvoice(inv, `inv-${submitKeyRef.current}`)
+            createdInvoiceIdRef.current = id
+          } catch (cause) {
+            const msg = cause instanceof Error ? cause.message : "Invoice could not be created."
+            toast(msg)
+            throw cause
+          }
+        }
+
         if (channel === "PayPal" && sendNow) {
-          setTimeout(() => toast(requestPayPalSend(inv.id).message), 0)
-        } else toast(`${inv.id} saved as draft`)
-        onCreated(inv.id)
+          setStep?.(isOwner ? "Sending to PayPal…" : "Requesting approval…")
+          const result = await requestPayPalSend(id, isOwner, `appr-${submitKeyRef.current}`)
+          if (!result.ok) {
+            close()
+            onCreated(id)
+            toast(`${id} saved as draft. PayPal send failed: ${result.message}`)
+            return
+          }
+          close()
+          onCreated(id)
+          if (isOwner) {
+            toast(`${id} sent via PayPal Sandbox`)
+          } else {
+            toast("Sent to Owner for approval")
+          }
+        } else {
+          close()
+          onCreated(id)
+          toast(`${id} saved as draft`)
+        }
       }}
     >
+      <div className="help-box" style={{ marginBottom: "14px" }}>
+        You are billing {client.name}. They pay you. Status becomes Paid only after PayPal confirms or you record the bank reference.
+      </div>
       <div className="form-grid">
         <Field label="Client">
           <Select
@@ -466,7 +784,7 @@ function CreateInvoice({ close, onCreated }: { close: () => void; onCreated: (id
             <option value={45}>Net 45</option>
           </Select>
         </Field>
-        <Field label="Currency & channel" hint={channel === "PayPal" ? `Collected through PayPal invoicing (${PAYPAL_MODE}).` : "The client pays by ACH or wire; record payment with the bank reference."}>
+        <Field label="Currency & channel" hint={channel === "PayPal" ? `Collected through PayPal invoicing (${mode === "hosted" ? `${paypalEnvironment} backend` : PAYPAL_MODE}).` : "The client pays by ACH or wire; record payment with the bank reference."}>
           <Select value={channel} onChange={(e) => setChannel(e.target.value as Invoice["channel"])}>
             <option value="PayPal">{state.settings.currency} · PayPal</option>
             <option value="Bank transfer">{state.settings.currency} · Bank transfer</option>

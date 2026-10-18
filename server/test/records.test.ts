@@ -3,17 +3,21 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { createSeed } from "../src/core"
 import { prisma } from "../src/db"
 import { buildApp } from "../src/app"
+import { config } from "../src/config"
 import { createAccessToken } from "../src/plugins/auth"
 
 const suffix = randomUUID().replaceAll("-", "").slice(0, 12)
 const workspaceId = `records-${suffix}`
 const otherWorkspaceId = `records-other-${suffix}`
 const ownerId = `user-owner-${suffix}`
+const managerId = `user-manager-${suffix}`
 const viewerId = `user-viewer-${suffix}`
 const ownerEmail = `records-owner-${suffix}@example.test`
+const managerEmail = `records-manager-${suffix}@example.test`
 const viewerEmail = `records-viewer-${suffix}@example.test`
 const app = await buildApp()
 let ownerToken = ""
+let managerToken = ""
 let viewerToken = ""
 let otherWorkspaceToken = ""
 
@@ -58,6 +62,7 @@ beforeAll(async () => {
   await prisma.user.createMany({
     data: [
       { id: ownerId, email: ownerEmail, name: "Records Owner", passwordHash: "unused" },
+      { id: managerId, email: managerEmail, name: "Records Manager", passwordHash: "unused" },
       { id: viewerId, email: viewerEmail, name: "Records Viewer", passwordHash: "unused" },
     ],
   })
@@ -66,11 +71,13 @@ beforeAll(async () => {
   await prisma.membership.createMany({
     data: [
       { workspaceId, userId: ownerId, role: "Owner" },
+      { workspaceId, userId: managerId, role: "FinanceManager" },
       { workspaceId, userId: viewerId, role: "Viewer" },
       { workspaceId: otherWorkspaceId, userId: ownerId, role: "Owner" },
     ],
   })
   ownerToken = await createAccessToken(ownerId)
+  managerToken = await createAccessToken(managerId)
   viewerToken = await createAccessToken(viewerId)
   otherWorkspaceToken = ownerToken
 })
@@ -160,6 +167,39 @@ describe("record routes", () => {
       status: "Review",
       reviewReason: expect.stringContaining(created.json().id),
     })
+    const confirmedReview = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/transactions/${duplicate.json().id}`,
+      headers: headers(ownerToken),
+      payload: { status: "Recorded" },
+    })
+    expect(confirmedReview.statusCode).toBe(200)
+    expect(confirmedReview.json()).toMatchObject({ status: "Recorded" })
+
+    const idempotencyKey = `idemp-txn-${suffix}`
+    const idempPayload = { ...payload, description: "Idempotent payment" }
+    const firstPost = await app.inject({
+      method: "POST",
+      url: "/api/v1/transactions",
+      headers: { ...headers(ownerToken), "idempotency-key": idempotencyKey },
+      payload: idempPayload,
+    })
+    expect(firstPost.statusCode).toBe(200)
+    const firstId = firstPost.json().id
+
+    const secondPost = await app.inject({
+      method: "POST",
+      url: "/api/v1/transactions",
+      headers: { ...headers(ownerToken), "idempotency-key": idempotencyKey },
+      payload: idempPayload,
+    })
+    expect(secondPost.statusCode).toBe(200)
+    expect(secondPost.json().id).toBe(firstId)
+
+    const matchingRows = await prisma.transaction.count({
+      where: { workspaceId, id: firstId },
+    })
+    expect(matchingRows).toBe(1)
 
     const future = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
     const futureResponse = await app.inject({
@@ -798,6 +838,208 @@ describe("record routes", () => {
       url: "/api/v1/cashflow/forecast?horizon=7&scenario=expected,bogus",
       headers: headers(viewerToken),
     })).statusCode).toBe(400)
+    const viewerReset = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/reset-demo",
+      headers: headers(viewerToken),
+    })
+    expect(viewerReset.statusCode).toBe(403)
     expect(await prisma.auditEvent.count({ where: { workspaceId } })).toBeGreaterThan(0)
   })
+
+  it("enforces permissions, validation, transactional rollback, and audit logging for PUT /api/v1/settings/forecast-assumptions", async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const client = await prisma.client.create({
+      data: {
+        workspaceId,
+        id: `fa-client-${suffix}`,
+        name: "Forecast Assumptions Client",
+        email: "fa-client@example.test",
+        country: "US",
+        currency: "USD",
+        avgDelayDays: 0,
+      },
+    })
+    const sentInvoice = await prisma.invoice.create({
+      data: {
+        workspaceId,
+        id: `INV-FA-SENT-${suffix}`,
+        clientId: client.id,
+        kind: "Project",
+        issueDate: today,
+        dueDate: today,
+        currency: "USD",
+        lineItems: [{ description: "Dev work", quantity: 1, unitPrice: 1000 }],
+        status: "Sent",
+        channel: "BankTransfer",
+        reminders: [],
+      },
+    })
+    const draftInvoice = await prisma.invoice.create({
+      data: {
+        workspaceId,
+        id: `INV-FA-DRAFT-${suffix}`,
+        clientId: client.id,
+        kind: "Project",
+        issueDate: today,
+        dueDate: today,
+        currency: "USD",
+        lineItems: [{ description: "Design work", quantity: 1, unitPrice: 500 }],
+        status: "Draft",
+        channel: "PayPal",
+        reminders: [],
+      },
+    })
+
+    // 1. Viewer gets 403
+    const viewerRes = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/forecast-assumptions",
+      headers: headers(viewerToken),
+      payload: { safetyThreshold: 1000, invoiceOverrides: [] },
+    })
+    expect(viewerRes.statusCode).toBe(403)
+
+    // 2. Negative threshold returns 400
+    const negativeRes = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/forecast-assumptions",
+      headers: headers(ownerToken),
+      payload: { safetyThreshold: -100, invoiceOverrides: [] },
+    })
+    expect(negativeRes.statusCode).toBe(400)
+
+    // 3. Non-integer delay returns 400
+    const nonIntRes = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/forecast-assumptions",
+      headers: headers(ownerToken),
+      payload: { safetyThreshold: 1000, invoiceOverrides: [{ id: sentInvoice.id, expectedDelayOverride: 3.5 }] },
+    })
+    expect(nonIntRes.statusCode).toBe(400)
+
+    // 4. Duplicate invoice IDs returns 400
+    const duplicateRes = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/forecast-assumptions",
+      headers: headers(ownerToken),
+      payload: {
+        safetyThreshold: 1000,
+        invoiceOverrides: [
+          { id: sentInvoice.id, expectedDelayOverride: 5 },
+          { id: sentInvoice.id, expectedDelayOverride: 10 },
+        ],
+      },
+    })
+    expect(duplicateRes.statusCode).toBe(400)
+
+    // Initial threshold from createTestWorkspace is 1000
+    const initialSettings = await prisma.workspaceSettings.findUniqueOrThrow({ where: { workspaceId } })
+    const baselineThreshold = initialSettings.safetyThreshold.toNumber()
+
+    // 5. Non-sent (Draft) invoice returns 409 and NOTHING is saved (threshold unchanged)
+    const draftRes = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/forecast-assumptions",
+      headers: headers(ownerToken),
+      payload: { safetyThreshold: 9999, invoiceOverrides: [{ id: draftInvoice.id, expectedDelayOverride: 7 }] },
+    })
+    expect(draftRes.statusCode).toBe(409)
+    const settingsAfterDraftFail = await prisma.workspaceSettings.findUniqueOrThrow({ where: { workspaceId } })
+    expect(settingsAfterDraftFail.safetyThreshold.toNumber()).toBe(baselineThreshold)
+
+    // 6. Unknown invoice id returns 409 and NOTHING is saved (threshold unchanged)
+    const unknownRes = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/forecast-assumptions",
+      headers: headers(ownerToken),
+      payload: { safetyThreshold: 8888, invoiceOverrides: [{ id: `non-existent-${suffix}`, expectedDelayOverride: 7 }] },
+    })
+    expect(unknownRes.statusCode).toBe(409)
+    const settingsAfterUnknownFail = await prisma.workspaceSettings.findUniqueOrThrow({ where: { workspaceId } })
+    expect(settingsAfterUnknownFail.safetyThreshold.toNumber()).toBe(baselineThreshold)
+
+    // Verify 0 audit events so far for forecast assumptions
+    const auditCountBefore = await prisma.auditEvent.count({
+      where: { workspaceId, action: "Forecast assumptions updated" },
+    })
+    expect(auditCountBefore).toBe(0)
+
+    // 7. Owner succeeds -> writes exactly 1 audit event
+    const ownerRes = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/forecast-assumptions",
+      headers: headers(ownerToken),
+      payload: {
+        safetyThreshold: 1500,
+        invoiceOverrides: [{ id: sentInvoice.id, expectedDelayOverride: 5 }],
+      },
+    })
+    expect(ownerRes.statusCode).toBe(200)
+    expect(ownerRes.json()).toEqual({ saved: true })
+    const settingsAfterOwner = await prisma.workspaceSettings.findUniqueOrThrow({ where: { workspaceId } })
+    expect(settingsAfterOwner.safetyThreshold.toNumber()).toBe(1500)
+    const sentAfterOwner = await prisma.invoice.findUniqueOrThrow({ where: { workspaceId_id: { workspaceId, id: sentInvoice.id } } })
+    expect(sentAfterOwner.expectedDelayOverride).toBe(5)
+
+    const auditCountAfterOwner = await prisma.auditEvent.count({
+      where: { workspaceId, action: "Forecast assumptions updated" },
+    })
+    expect(auditCountAfterOwner).toBe(1)
+
+    // 8. Finance Manager succeeds -> writes exactly 1 more audit event (total 2)
+    const managerRes = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/forecast-assumptions",
+      headers: headers(managerToken),
+      payload: {
+        safetyThreshold: 2200,
+        invoiceOverrides: [{ id: sentInvoice.id, expectedDelayOverride: null }],
+      },
+    })
+    expect(managerRes.statusCode).toBe(200)
+    expect(managerRes.json()).toEqual({ saved: true })
+    const settingsAfterManager = await prisma.workspaceSettings.findUniqueOrThrow({ where: { workspaceId } })
+    expect(settingsAfterManager.safetyThreshold.toNumber()).toBe(2200)
+    const sentAfterManager = await prisma.invoice.findUniqueOrThrow({ where: { workspaceId_id: { workspaceId, id: sentInvoice.id } } })
+    expect(sentAfterManager.expectedDelayOverride).toBeNull()
+
+    const auditCountAfterManager = await prisma.auditEvent.count({
+      where: { workspaceId, action: "Forecast assumptions updated" },
+    })
+    expect(auditCountAfterManager).toBe(2)
+  })
+
+  it("refuses POST /api/v1/admin/reset-demo for non-Owners and when demo-reset flag is off", async () => {
+    const viewerReset = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/reset-demo",
+      headers: headers(viewerToken),
+    })
+    expect(viewerReset.statusCode).toBe(403)
+    expect(viewerReset.json()).toMatchObject({ code: "forbidden_role" })
+
+    const managerReset = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/reset-demo",
+      headers: headers(managerToken),
+    })
+    expect(managerReset.statusCode).toBe(403)
+    expect(managerReset.json()).toMatchObject({ code: "forbidden_role" })
+
+    const originalAllowDemoReset = config.allowDemoReset
+    try {
+      (config as { allowDemoReset: boolean }).allowDemoReset = false
+      const ownerReset = await app.inject({
+        method: "POST",
+        url: "/api/v1/admin/reset-demo",
+        headers: headers(ownerToken),
+      })
+      expect(ownerReset.statusCode).toBe(403)
+      expect(ownerReset.json()).toMatchObject({ code: "demo_reset_disabled" })
+    } finally {
+      (config as { allowDemoReset: boolean }).allowDemoReset = originalAllowDemoReset
+    }
+  })
 })
+

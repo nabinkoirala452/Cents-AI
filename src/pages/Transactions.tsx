@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { AlertTriangle, Check, Download, FileText, Pencil, Plus, Search, ShieldCheck, Trash2, Upload, X } from "lucide-react"
-import { Badge, Button, Card, CardHeader, Drawer, Field, FormModal, Input, MetricCard, Modal, Note, Select, Textarea, Title } from "../components/ui"
+import { Badge, Button, Card, CardHeader, Drawer, Field, FormModal, Input, MetricCard, Modal, Note, Select, Textarea, Title, useAction } from "../components/ui"
 import { download, parseCsv, sampleCsv, toCsv } from "../lib/csv"
 import { addDays, dayInMonth, fmtDate, monthKey, parseLooseDate } from "../lib/dates"
 import { findDuplicate, periodTotals } from "../lib/finance"
@@ -20,7 +20,7 @@ const periodRange = (period: string, today: string): [string, string] => {
 }
 
 export default function TransactionsPage() {
-  const { state, today, update, log, actor, toast, can } = useStore()
+  const { state, today, update, log, actor, toast, can, deleteTransaction, confirmTransaction, highlightedId } = useStore()
   const [query, setQuery] = useState("")
   const [type, setType] = useState("All")
   const [status, setStatus] = useState("All")
@@ -31,6 +31,27 @@ export default function TransactionsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(routeParams().get("id"))
   const [editing, setEditing] = useState<Transaction | "new" | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+
+  const deleteAction = useAction(async () => {
+    if (!selected) return
+    if (selected.status === "Verified" || selected.invoiceId) {
+      toast("Verified and invoice-linked records cannot be deleted — they are part of the audit trail.")
+      return
+    }
+    const result = await deleteTransaction(selected.id)
+    if (!result.ok) return toast(result.message)
+    log({ actor, action: "Transaction deleted", detail: `${selected.id} · ${selected.description} · ${money(selected.amount)}`, ref: selected.id, outcome: "warning" })
+    setSelectedId(null)
+    toast("Transaction deleted and logged")
+  })
+
+  const confirmAction = useAction(async () => {
+    if (!selected) return
+    const result = await confirmTransaction(selected.id)
+    if (!result.ok) return toast(result.message)
+    log({ actor, action: "Review cleared", detail: `${selected.id} confirmed as a valid entry`, ref: selected.id, outcome: "info" })
+    toast("Marked as reviewed")
+  })
 
   const [from, to] = periodRange(period, today)
   const inPeriod = state.transactions.filter((t) => t.date >= from && t.date <= to)
@@ -149,7 +170,7 @@ export default function TransactionsPage() {
             </thead>
             <tbody>
               {shown.map((t) => (
-                <tr key={t.id} className="clickable" tabIndex={0} onClick={() => setSelectedId(t.id)} onKeyDown={(e) => e.key === "Enter" && setSelectedId(t.id)}>
+                <tr key={t.id} className={`clickable ${t.id === highlightedId ? "row-highlight" : ""}`} tabIndex={0} onClick={() => setSelectedId(t.id)} onKeyDown={(e) => e.key === "Enter" && setSelectedId(t.id)}>
                   <td className="muted">{fmtDate(t.date)}</td>
                   <td>
                     <strong>{t.description}</strong>
@@ -269,32 +290,18 @@ export default function TransactionsPage() {
               <Button
                 icon={Trash2}
                 variant="ghost"
-                disabled={!can.edit}
-                onClick={() => {
-                  if (selected.status === "Verified" || selected.invoiceId) return toast("Verified and invoice-linked records cannot be deleted — they are part of the audit trail.")
-                  update((d) => {
-                    d.transactions = d.transactions.filter((t) => t.id !== selected.id)
-                  })
-                  log({ actor, action: "Transaction deleted", detail: `${selected.id} · ${selected.description} · ${money(selected.amount)}`, ref: selected.id, outcome: "warning" })
-                  setSelectedId(null)
-                  toast("Transaction deleted and logged")
-                }}
+                disabled={!can.edit || deleteAction.busy}
+                loading={deleteAction.busy}
+                onClick={() => deleteAction.run()}
               >
                 Delete
               </Button>
               {selected.status === "Review" && (
                 <Button
                   icon={Check}
-                  disabled={!can.edit}
-                  onClick={() => {
-                    update((d) => {
-                      const t = d.transactions.find((x) => x.id === selected.id)!
-                      t.status = "Recorded"
-                      t.reviewReason = undefined
-                    })
-                    log({ actor, action: "Review cleared", detail: `${selected.id} confirmed as a valid entry`, ref: selected.id, outcome: "info" })
-                    toast("Marked as reviewed")
-                  }}
+                  disabled={!can.edit || confirmAction.busy}
+                  loading={confirmAction.busy}
+                  onClick={() => confirmAction.run()}
                 >
                   Not a duplicate
                 </Button>
@@ -350,8 +357,9 @@ export default function TransactionsPage() {
 }
 
 function TransactionForm({ record, close }: { record?: Transaction; close: () => void }) {
-  const { state, today, update, addTransaction, log, actor, toast } = useStore()
+  const { state, today, addTransaction, patchTransaction, log, actor, toast } = useStore()
   const locked = record?.status === "Verified"
+  const idempotencyKeyRef = useRef(crypto.randomUUID())
   const [draft, setDraft] = useState({
     type: record?.type ?? ("Expense" as TxnType),
     description: record?.description ?? "",
@@ -370,25 +378,46 @@ function TransactionForm({ record, close }: { record?: Transaction; close: () =>
       title={record ? `Edit ${record.id}` : "Add transaction"}
       submitLabel={record ? "Save changes" : "Save transaction"}
       onClose={close}
-      onSubmit={() => {
+      onSubmit={async () => {
         const amount = Number(draft.amount)
-        if (!draft.description.trim() || !draft.party.trim() || !(amount > 0)) return toast("Enter a description, party and positive amount")
-        if (draft.date > today) return toast("Transactions can't be dated in the future — use Payroll, Expenses or Invoices for planned items.")
+        if (!draft.description.trim() || !draft.party.trim() || !(amount > 0)) {
+          const msg = "Enter a description, party and positive amount"
+          toast(msg)
+          throw new Error(msg)
+        }
+        if (draft.date > today) {
+          const msg = "Transactions can't be dated in the future — use Payroll, Expenses or Invoices for planned items."
+          toast(msg)
+          throw new Error(msg)
+        }
         const fields = { type: draft.type, description: draft.description.trim(), amount, party: draft.party.trim(), category: draft.category, projectId: draft.projectId || undefined, date: draft.date, reference: draft.reference || undefined, notes: draft.notes || undefined }
         if (record) {
-          update((d) => {
-            const t = d.transactions.find((x) => x.id === record.id)!
-            if (locked) Object.assign(t, { category: fields.category, projectId: fields.projectId, notes: fields.notes })
-            else Object.assign(t, fields)
-          })
+          const editPatch = locked ? { category: fields.category, projectId: fields.projectId, notes: fields.notes } : fields
+          const result = await patchTransaction(record.id, editPatch)
+          if (!result.ok) {
+            toast(result.message)
+            throw new Error(result.message)
+          }
           log({ actor, action: "Transaction edited", detail: `${record.id}${locked ? " (category/notes only — verified record)" : ""}`, ref: record.id, outcome: "info" })
           toast("Changes saved")
+          close()
         } else {
-          const t = addTransaction({ ...fields, source: "Manual" })
-          log({ actor, action: "Transaction added", detail: `${t.id} · ${t.description} · ${money(t.amount)}`, ref: t.id, outcome: t.status === "Review" ? "warning" : "info" })
-          toast(t.status === "Review" ? "Saved — flagged as a possible duplicate for review" : "Transaction recorded")
+          try {
+            const t = await addTransaction({ ...fields, source: "Manual" }, idempotencyKeyRef.current)
+            log({ actor, action: "Transaction added", detail: `${t.id} · ${t.description} · ${money(t.amount)}`, ref: t.id, outcome: t.status === "Review" ? "warning" : "info" })
+            const dupMatch = t.reviewReason?.match(/duplicate of ([A-Za-z0-9-]+)/i)
+            const dupId = dupMatch ? dupMatch[1] : ""
+            const toastMsg = t.status === "Review"
+              ? (dupId ? `Saved — flagged as a possible duplicate of ${dupId}` : (t.reviewReason ? `Saved — ${t.reviewReason.toLowerCase()}` : "Saved — flagged as a possible duplicate"))
+              : "Transaction recorded"
+            toast(toastMsg)
+            close()
+          } catch (cause) {
+            const msg = cause instanceof Error ? cause.message : "The transaction could not be recorded."
+            toast(msg)
+            throw cause
+          }
         }
-        close()
       }}
     >
       {locked && (
@@ -447,7 +476,7 @@ const FIELDS = ["date", "description", "amount", "type", "party", "category"] as
 type MapField = (typeof FIELDS)[number]
 
 function ImportWizard({ close }: { close: () => void }) {
-  const { state, today, update, log, actor, toast } = useStore()
+  const { state, today, update, log, actor, toast, mode, importTransactions } = useStore()
   const [step, setStep] = useState(1)
   const [fileName, setFileName] = useState("")
   const [rows, setRows] = useState<string[][]>([])
@@ -506,13 +535,30 @@ function ImportWizard({ close }: { close: () => void }) {
   const dups = parsed.filter((p) => !p.error && p.duplicateOf)
   const invalid = parsed.filter((p) => p.error)
 
-  const confirm = () => {
+  const confirm = async () => {
+    if (mode === "hosted") {
+      try {
+        const result = await importTransactions(fileName, parsed.map((item) => ({
+          date: item.date,
+          description: item.description,
+          amount: item.amount,
+          type: item.type,
+          party: item.party,
+          category: item.category,
+        })), skipDuplicates)
+        setImported(result.imported)
+        setStep(4)
+      } catch (cause) {
+        toast(cause instanceof Error ? cause.message : "The CSV import failed.")
+      }
+      return
+    }
     const toAdd = [...valid, ...(skipDuplicates ? [] : dups)].map<Transaction>((p) => ({
       id: uid("CSV"), date: p.date!, description: p.description, party: p.party, category: p.category, type: p.type!, amount: p.amount,
       status: p.duplicateOf || p.category === "Uncategorized" ? "Review" : "Recorded", source: "CSV import",
       reviewReason: p.duplicateOf ? `Possible duplicate of ${p.duplicateOf} (imported from ${fileName})` : p.category === "Uncategorized" ? "Imported without a category" : undefined,
     }))
-    update((d) => {
+    await update((d) => {
       d.transactions.push(...toAdd)
       d.transactions.sort((a, b) => b.date.localeCompare(a.date))
     })

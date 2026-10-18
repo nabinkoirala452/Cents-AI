@@ -2,6 +2,7 @@ import { Component, useEffect, useState } from "react"
 import { Header, Sidebar, Toast } from "./components/layout"
 import { go, useRoute, type PageId } from "./lib/router"
 import { StoreProvider } from "./lib/store"
+import { useStore } from "./lib/store"
 import ApprovalsPage from "./pages/Approvals"
 import AuthPage from "./pages/Auth"
 import BriefingPage from "./pages/Briefing"
@@ -61,6 +62,7 @@ class PageBoundary extends Component<{ children: React.ReactNode }, { error?: Er
 }
 
 function AppShell({ page, params }: { page: PageId; params: URLSearchParams }) {
+  const store = useStore()
   const [dark, setDark] = useState(() => {
     try {
       return localStorage.getItem(THEME_KEY) === "dark"
@@ -79,7 +81,10 @@ function AppShell({ page, params }: { page: PageId; params: URLSearchParams }) {
   const Page = PAGE_COMPONENTS[page]
   return (
     <div className={dark ? "app dark" : "app"}>
-      <Sidebar page={page} open={sidebarOpen} close={() => setSidebarOpen(false)} signOut={() => go("/")} />
+      <Sidebar page={page} open={sidebarOpen} close={() => setSidebarOpen(false)} signOut={() => {
+        store.signOut()
+        go(store.mode === "hosted" ? "login" : "/")
+      }} />
       <div className="main-shell">
         <Header page={page} dark={dark} setDark={setDark} menu={() => setSidebarOpen(true)} />
         <main key={page + params.toString()}>
@@ -95,7 +100,32 @@ function AppShell({ page, params }: { page: PageId; params: URLSearchParams }) {
 
 function Router() {
   const route = useRoute()
+  const store = useStore()
   const navigate = (view: View) => go(view === "app" ? "dashboard" : view === "landing" ? "/" : `/${view}`)
+  if (store.mode === "hosted" && store.initialLoading) {
+    return <div className="page"><div className="empty" role="status">Loading your workspace…</div></div>
+  }
+  if (store.mode === "hosted" && store.loadError) {
+    return (
+      <div className="page">
+        <div className="empty" role="alert">
+          <strong>Your workspace could not be loaded.</strong>
+          <p>{store.loadError}</p>
+          <button className="button button-secondary" onClick={() => void store.refresh().catch(() => undefined)}>Retry</button>
+          {store.authenticated && <button className="button button-ghost" onClick={() => { store.signOut(); go("login") }}>Sign out</button>}
+        </div>
+      </div>
+    )
+  }
+  if (store.mode === "hosted" && !store.authenticated) {
+    if (route.view === "signup" || route.view === "register") {
+      return <AuthPage key={route.view} mode={route.view} navigate={navigate} />
+    }
+    return <AuthPage key="login" mode="login" navigate={navigate} />
+  }
+  if (store.mode === "hosted" && route.view === "landing") {
+    return <AppShell page="dashboard" params={new URLSearchParams()} />
+  }
   if (route.view === "landing") return <LandingPage navigate={navigate} />
   if (route.view !== "app") return <AuthPage key={route.view} mode={route.view} navigate={navigate} />
   return <AppShell page={route.page} params={route.params} />

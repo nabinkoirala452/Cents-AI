@@ -15,7 +15,7 @@ const EVENT_PAGE: Record<CashEvent["kind"], string> = {
 }
 
 export default function BriefingPage() {
-  const { state, today, update, toast } = useStore()
+  const { state, today, restoreInsights, toast } = useStore()
   const [horizon, setHorizon] = useState<7 | 30 | 90>(state.settings.defaultHorizon)
   const [generatedAt, setGeneratedAt] = useState(() => new Date())
   const brief = useMemo(() => buildBriefing(state, today, horizon), [state, today, horizon, generatedAt])
@@ -108,7 +108,14 @@ export default function BriefingPage() {
               <div className="intro-actions">
                 <Badge tone={active.length ? "amber" : "green"}>{active.length} active</Badge>
                 {dismissed > 0 && (
-                  <Button variant="ghost" onClick={() => update((d) => { d.dismissedInsights = [] })}>
+                  <Button
+                    variant="ghost"
+                    onClick={async () => {
+                      const res = await restoreInsights()
+                      if (!res.ok) return toast(res.message)
+                      toast("Dismissed insights restored")
+                    }}
+                  >
                     Restore {dismissed} dismissed
                   </Button>
                 )}

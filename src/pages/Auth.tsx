@@ -12,6 +12,7 @@ export default function AuthPage({
   navigate: (view: View) => void
 }) {
   const [submitted, setSubmitted] = useState(false)
+  const [apiError, setApiError] = useState("")
   const copy = {
     login: {
       eyebrow: "WELCOME BACK",
@@ -33,12 +34,28 @@ export default function AuthPage({
     },
   }[mode]
 
-  const { update } = useStore()
+  const { update, mode: storeMode, login, authMessage } = useStore()
 
-  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     const value = (key: string) => String(form.get(key) ?? "").trim()
+    if (storeMode === "hosted") {
+      if (mode !== "login") {
+        setApiError("Accounts are created by the workspace owner in this prototype.")
+        return
+      }
+      setSubmitted(true)
+      setApiError("")
+      try {
+        await login(value("email"), value("password"))
+        navigate("app")
+      } catch (cause) {
+        setApiError(cause instanceof Error ? cause.message : "Sign-in failed.")
+        setSubmitted(false)
+      }
+      return
+    }
     if (mode === "signup") {
       const name = `${value("firstName")} ${value("lastName")}`.trim()
       update((d) => {
@@ -103,16 +120,25 @@ export default function AuthPage({
           <Title>{copy.title}</Title>
           <p className="auth-description">{copy.description}</p>
 
-          {mode === "login" && (
+          {(authMessage || apiError) && <p className="registration-note" role="alert">{apiError || authMessage}</p>}
+
+          {storeMode === "hosted" && (mode === "signup" || mode === "register") && (
+            <p className="registration-note" role="status">
+              Accounts are created by the workspace owner in this prototype.
+            </p>
+          )}
+
+          {!(storeMode === "hosted" && mode !== "login") && mode === "login" && (
             <>
               <label>
                 Work email
                 <div className="auth-input">
                   <Mail size={16} />
                   <Input
+                    name="email"
                     type="email"
-                    placeholder="alex@meridian.example"
-                    defaultValue="alex@meridian.example"
+                    placeholder={storeMode === "demo" ? "alex@meridian.example" : "you@youragency.com"}
+                    defaultValue={storeMode === "demo" ? "alex@meridian.example" : ""}
                     required
                   />
                 </div>
@@ -127,9 +153,10 @@ export default function AuthPage({
                 <div className="auth-input">
                   <LockKeyhole size={16} />
                   <Input
+                    name="password"
                     type="password"
                     placeholder="Enter your password"
-                    defaultValue="demopassword"
+                    defaultValue={storeMode === "demo" ? "demopassword" : ""}
                     required
                   />
                 </div>
@@ -137,7 +164,7 @@ export default function AuthPage({
             </>
           )}
 
-          {mode === "signup" && (
+          {storeMode === "demo" && mode === "signup" && (
             <>
               <div className="auth-form-row">
                 <label>
@@ -176,7 +203,7 @@ export default function AuthPage({
             </>
           )}
 
-          {mode === "register" && (
+          {storeMode === "demo" && mode === "register" && (
             <>
               <label>
                 Agency name
@@ -221,24 +248,28 @@ export default function AuthPage({
             </>
           )}
 
-          <Button
-            type="submit"
-            variant="primary"
-            className="auth-submit"
-            disabled={submitted}
-          >
-            {submitted ? (
-              <>
-                <span className="auth-spinner" /> Setting up…
-              </>
-            ) : (
-              <>
-                {copy.action} <ArrowRight size={15} />
-              </>
-            )}
-          </Button>
+          {!(storeMode === "hosted" && mode !== "login") && (
+            <Button
+              type="submit"
+              variant="primary"
+              className="auth-submit"
+              disabled={submitted}
+            >
+              {submitted ? (
+                <>
+                  <span className="auth-spinner" /> Signing in…
+                </>
+              ) : (
+                <>
+                  {copy.action} <ArrowRight size={15} />
+                </>
+              )}
+            </Button>
+          )}
 
-          {mode !== "register" && (
+          {apiError && <p className="auth-error" role="alert">{apiError}</p>}
+
+          {(storeMode === "demo" || mode !== "register") && (
             <div className="auth-switch">
               {mode === "login"
                 ? "New to CentsAI?"
@@ -254,7 +285,7 @@ export default function AuthPage({
               </Button>
             </div>
           )}
-          {mode === "register" && (
+          {mode === "register" && storeMode === "demo" && (
             <div className="auth-switch">
               Not ready yet?
               <Button
@@ -262,7 +293,7 @@ export default function AuthPage({
                 type="button"
                 onClick={() => navigate("app")}
               >
-                Explore with demo data
+                Explore the demo
               </Button>
             </div>
           )}

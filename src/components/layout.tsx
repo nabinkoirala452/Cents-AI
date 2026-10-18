@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Bell, Bot, Check, ChevronDown, Command, LogOut, Menu, Moon, Search, Sun, X } from "lucide-react"
+import { Bell, Bot, Check, ChevronDown, Command, Loader2, LogOut, Menu, Moon, Search, Sun, X } from "lucide-react"
 import { buildBriefing, clientOf, invoiceTotal, receivables } from "../lib/finance"
 import { initials, money } from "../lib/format"
 import { go, NAV_GROUPS, PAGES, type PageId } from "../lib/router"
@@ -7,7 +7,7 @@ import { useStore } from "../lib/store"
 import { Badge, Button, Logo } from "./ui"
 
 export function Sidebar({ page, open, close, signOut }: { page: PageId; open: boolean; close: () => void; signOut: () => void }) {
-  const { state, today, actor } = useStore()
+  const { state, today, actor, mode, paypalMode, paypalEnvironment } = useStore()
   const counts: Partial<Record<PageId, number>> = {
     invoices: receivables(state, today).overdue.length,
     approvals: state.approvals.filter((a) => a.status === "Pending" || a.status === "Submitted").length,
@@ -26,7 +26,7 @@ export function Sidebar({ page, open, close, signOut }: { page: PageId; open: bo
             <div className="workspace-avatar">{initials(state.settings.agencyName)}</div>
             <div>
               <strong>{state.settings.agencyName}</strong>
-              <small>{state.settings.agencyType} · Sandbox</small>
+              <small>{state.settings.agencyType} · {mode === "hosted" ? (paypalMode === "fake" ? "Fake PayPal adapter" : `PayPal ${paypalEnvironment}`) : "Sandbox demo"}</small>
             </div>
             <ChevronDown size={14} />
           </button>
@@ -72,7 +72,7 @@ export function Sidebar({ page, open, close, signOut }: { page: PageId; open: bo
 }
 
 export function Header({ page, dark, setDark, menu }: { page: PageId; dark: boolean; setDark: (v: boolean) => void; menu: () => void }) {
-  const { state, today, actor } = useStore()
+  const { state, today, actor, pendingRequests } = useStore()
   const [palette, setPalette] = useState(false)
   const [bell, setBell] = useState(false)
   const alerts = useMemo(() => buildBriefing(state, today).priorities.slice(0, 6), [state, today])
@@ -95,6 +95,12 @@ export function Header({ page, dark, setDark, menu }: { page: PageId; dark: bool
         <span>{state.settings.agencyName}</span>
         <span>/</span>
         <strong>{PAGES[page].label}</strong>
+        {pendingRequests > 0 && (
+          <span className="working-badge inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium text-amber-500 bg-amber-500/10 rounded-full animate-pulse">
+            <Loader2 size={12} className="animate-spin" />
+            Working…
+          </span>
+        )}
       </div>
       <div className="top-actions">
         <button className="command-search" onClick={() => setPalette(true)}>
@@ -132,6 +138,11 @@ export function Header({ page, dark, setDark, menu }: { page: PageId; dark: bool
         <Button variant="ghost" aria-label={dark ? "Use light theme" : "Use dark theme"} className="icon-button" icon={dark ? Sun : Moon} onClick={() => setDark(!dark)} />
         <div className="header-avatar" title={actor}>{initials(actor)}</div>
       </div>
+      {pendingRequests > 0 && (
+        <div className="topbar-progress-track">
+          <div className="topbar-progress-indicator" />
+        </div>
+      )}
       {palette && <CommandPalette close={() => setPalette(false)} />}
     </header>
   )

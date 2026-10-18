@@ -27,6 +27,11 @@ export type SettingsPatch = {
   team?: Array<{ email: string; role: Role }>
 }
 
+export type ForecastAssumptions = {
+  safetyThreshold: number
+  invoiceOverrides: Array<{ id: string; expectedDelayOverride: number | null }>
+}
+
 const roleToDatabase: Record<Role, MembershipRole> = {
   Owner: "Owner",
   "Finance Manager": "FinanceManager",
@@ -144,5 +149,41 @@ export async function replaceDismissedInsights(ctx: RequestContext, dismissedIns
       outcome: "success",
     }, tx)
     return settings.dismissedInsights
+  })
+}
+
+export async function saveForecastAssumptions(ctx: RequestContext, assumptions: ForecastAssumptions) {
+  requireEdit(ctx.role)
+  const ids = assumptions.invoiceOverrides.map(({ id }) => id)
+  if (new Set(ids).size !== ids.length) {
+    throw new HttpError(400, "duplicate_invoice_override", "Each invoice may appear only once.", "Bad Request")
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (ids.length) {
+      const invoices = await tx.invoice.findMany({
+        where: { workspaceId: ctx.workspaceId, id: { in: ids } },
+        select: { id: true, status: true },
+      })
+      if (invoices.length !== ids.length || invoices.some((invoice) => invoice.status !== "Sent")) {
+        throw new HttpError(409, "invoice_override_not_editable", "Receipt assumptions can only be changed for sent invoices.", "Conflict")
+      }
+      for (const item of assumptions.invoiceOverrides) {
+        await tx.invoice.update({
+          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: item.id } },
+          data: { expectedDelayOverride: item.expectedDelayOverride },
+        })
+      }
+    }
+    await tx.workspaceSettings.update({
+      where: { workspaceId: ctx.workspaceId },
+      data: { safetyThreshold: assumptions.safetyThreshold },
+    })
+    await audit(ctx, {
+      action: "Forecast assumptions updated",
+      detail: `Safety threshold and ${ids.length} sent-invoice receipt assumption(s) updated`,
+      outcome: "success",
+    }, tx)
+    return { saved: true }
   })
 }

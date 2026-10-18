@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify"
 import { z } from "zod"
 import { prisma } from "../../db"
 import { requireContext } from "../../plugins/auth"
-import { patchSettings, patchWorkspace, readWorkspaceState, replaceDismissedInsights } from "./service"
+import { patchSettings, patchWorkspace, readWorkspaceState, replaceDismissedInsights, saveForecastAssumptions } from "./service"
 
 function isValidTimeZone(timeZone: string): boolean {
   try {
@@ -50,6 +50,13 @@ const settingsPatch = z.object({
 const dismissedInsightsBody = z.object({
   dismissedInsights: z.array(z.string().min(1).max(200)).max(500),
 }).strict()
+const forecastAssumptionsBody = z.object({
+  safetyThreshold: z.number().finite().nonnegative().max(999_999_999_999.99),
+  invoiceOverrides: z.array(z.object({
+    id: z.string().trim().min(1).max(100),
+    expectedDelayOverride: z.number().int().nonnegative().max(3650).nullable(),
+  }).strict()).max(1000),
+}).strict()
 
 export function registerWorkspaceRoutes(app: FastifyInstance): void {
   app.get("/api/v1/me", async (request) => {
@@ -87,6 +94,15 @@ export function registerWorkspaceRoutes(app: FastifyInstance): void {
     replaceDismissedInsights(
       requireContext(request),
       dismissedInsightsBody.parse(request.body).dismissedInsights,
+    ),
+  )
+
+  app.put("/api/v1/settings/forecast-assumptions", {
+    schema: { body: forecastAssumptionsBody },
+  }, async (request) =>
+    saveForecastAssumptions(
+      requireContext(request),
+      forecastAssumptionsBody.parse(request.body),
     ),
   )
 }
