@@ -163,14 +163,16 @@ https://console.groq.com/keys and put it in `server/.env` as `LLM_API_KEY` (serv
 Endpoints:
 - `POST /api/v1/copilot/ask` `{ "question": "...", "history": [{ "role": "user" | "assistant", "text": "..." }] }` →
   `{ answer, engine, proposals }`. Any member may ask (20/min).
-- `POST /api/v1/copilot/daily-check` (Owner / Finance Manager, 5/min): the agent reviews cash, receivables and obligations,
-  checks PayPal status for sent PayPal invoices that are overdue or due soon, and prepares reminders for invoices still overdue.
+- `POST /api/v1/copilot/daily-check` (Owner / Finance Manager, 5/min): code checks PayPal status for sent PayPal invoices that are
+  overdue or due soon and computes the cash outlook, receivables and 14-day obligations. The model then gets that brief and only the
+  reminder tool: it decides which overdue invoices (without an open approval) to remind, writes each message, and summarises.
 
 Tools the agent can call:
 - **Finance tools** (`src/lib/copilot.ts`): read-only; they run the deterministic engine on `loadState()`.
 - **PayPal Agent Toolkit** (`@paypal/agent-toolkit/openai`), **read actions only**: `list_invoices`, `get_invoice`,
-  `search_invoicing`, `list_transactions`, `get_merchant_insights`, `list_disputes` against the PayPal Sandbox. The toolkit's
-  write tools (send, remind, cancel, refund, pay) are not enabled, because they would bypass approvals. Set
+  `list_transactions`, `get_merchant_insights` against the PayPal Sandbox (descriptions trimmed; `search_invoicing` is left out
+  because its schema alone is ~3K tokens). The toolkit's write tools (send, remind, cancel, refund, pay) are not enabled, because
+  they would bypass approvals. Set
   `COPILOT_PAYPAL_TOOLS=false` to turn this off; it's also off when `PAYPAL_MODE=fake`.
 - **Agent actions**: `propose_payment_reminder` (with message text the agent writes) and `propose_paypal_invoice_send` call
   the normal approval service with `preparedByAgent = true`. They only create a **Pending** approval, never use
@@ -192,3 +194,9 @@ Safeguards:
 
 Environment: `LLM_API_KEY`, `LLM_BASE_URL` (default `https://api.groq.com/openai/v1`), `LLM_MODEL`
 (default `openai/gpt-oss-120b`), `COPILOT_MODE` (`llm` | `rules`), `COPILOT_PAYPAL_TOOLS` (default `true`).
+`LLM_REASONING_EFFORT` (`low` | `medium` | `high` | `none`; default `low` for gpt-oss models, otherwise not sent).
+
+**Free-tier limits:** Groq's free tier allows 8K tokens/minute and 200K tokens/day for `openai/gpt-oss-120b`, and every agent
+turn re-sends the conversation. Requests are kept small (trimmed toolkit tools, 10 invoices in context, 12 table rows, 4 history
+turns, low reasoning effort); the SDK waits and retries on 429, and the last turn only offers `compose_answer`. A question
+typically costs 3–6K tokens.

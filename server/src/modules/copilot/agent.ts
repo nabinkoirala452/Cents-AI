@@ -67,8 +67,10 @@ export const PROPOSE_REMINDER = "propose_payment_reminder"
 export const PROPOSE_PAYPAL_SEND = "propose_paypal_invoice_send"
 export const CHECK_PAYMENT = "check_paypal_payment"
 const MAX_TURNS = 8
-const MAX_TABLE_ROWS_FOR_MODEL = 25
-const MAX_PAYPAL_RESULT_CHARS = 6000
+// Sized for Groq's free tier (8K tokens/minute): every turn re-sends the whole conversation.
+const MAX_TABLE_ROWS_FOR_MODEL = 12
+const MAX_PAYPAL_RESULT_CHARS = 3000
+const MAX_CONTEXT_INVOICES = 10
 
 const SYSTEM_PROMPT = `You are CentsAI, the finance agent for a small service agency (2-20 people). You help the owner understand cash, invoices, payroll, project margins, subscriptions and loans, and you prepare the next actions.
 
@@ -133,7 +135,7 @@ const parseComposed = (raw: unknown): Composed | null => {
   if (typeof o.headline !== "string" || !o.headline.trim() || !paragraphs || !missing) return null
   return {
     headline: o.headline.trim().slice(0, 400),
-    paragraphs: paragraphs.map((p) => p.trim()).filter(Boolean).slice(0, 4).map((p) => p.slice(0, 1200)),
+    paragraphs: paragraphs.map((p) => p.trim()).filter((p) => p && p !== (o.headline as string).trim()).slice(0, 4).map((p) => p.slice(0, 1200)),
     missing: missing.map((m) => m.trim()).filter(Boolean).slice(0, 5).map((m) => m.slice(0, 300)),
     primaryTool: typeof o.primary_tool === "string" ? o.primary_tool : "none",
   }
@@ -181,13 +183,16 @@ const dedupe = <T,>(items: T[], key: (item: T) => string) => {
 }
 
 const history = (turns: ChatTurn[]): ChatCompletionMessageParam[] => {
-  const recent = turns.slice(-8)
+  const recent = turns.slice(-4)
   while (recent.length && recent[0].role !== "user") recent.shift()
   return recent.map((t) => ({ role: t.role, content: t.text.slice(0, 2000) }))
 }
 
+const openInvoices = (state: State) =>
+  state.invoices.filter((i) => i.status === "Sent" || i.status === "Draft").sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+
 const contextLine = (state: State, today: string) =>
-  `Workspace: ${state.settings.agencyName}. Today is ${fmtDay(today)} (${today}). All amounts are in ${state.settings.currency}. Safety threshold: ${money(state.settings.safetyThreshold, state.settings.currency)}. Clients: ${state.clients.map((c) => c.name).join(", ") || "none"}. Open invoices: ${state.invoices.filter((i) => i.status === "Sent" || i.status === "Draft").map((i) => `${i.id} (${i.status}${i.paypal ? `, PayPal ${i.paypal.invoiceId}` : i.channel === "PayPal" ? ", PayPal" : ", bank transfer"}, ${money(invoiceTotal(i), i.currency)}, due ${i.dueDate})`).join("; ") || "none"}. The user's role is ${state.settings.role}.`
+  `Workspace: ${state.settings.agencyName}. Today is ${fmtDay(today)} (${today}). All amounts are in ${state.settings.currency}. Safety threshold: ${money(state.settings.safetyThreshold, state.settings.currency)}. Clients: ${state.clients.map((c) => c.name).join(", ") || "none"}. Open invoices (earliest due first, up to ${MAX_CONTEXT_INVOICES}): ${openInvoices(state).slice(0, MAX_CONTEXT_INVOICES).map((i) => `${i.id} (${i.status}${i.paypal ? `, PayPal ${i.paypal.invoiceId}` : i.channel === "PayPal" ? ", PayPal" : ", bank transfer"}, ${money(invoiceTotal(i), i.currency)}, due ${i.dueDate})`).join("; ") || "none"}. The user's role is ${state.settings.role}.`
 
 const parseArguments = (call: ChatCompletionMessageToolCall): unknown => {
   try {
@@ -214,18 +219,31 @@ export async function runLlmCopilot(input: {
   model: CopilotModel
   modelId: string
   capabilities?: AgentCapabilities
+  /** Only offer these tools (compose_answer is always offered). Keeps requests small. */
+  onlyTools?: string[]
+  /** Facts gathered in code before the model runs; they count as tool output for grounding. */
+  brief?: string
+  /** Answer to use when the model does not compose one (defaults to the rule-based router). */
+  fallback?: () => Promise<CopilotRun>
+  /** Finance tool results computed in code before the model runs; merged into the answer like tool calls. */
+  prefetched?: { name: string; input: unknown; answer: CopilotAnswer }[]
+  /** Sent as reasoning_effort, for reasoning models such as gpt-oss. */
+  reasoningEffort?: "low" | "medium" | "high"
 }): Promise<CopilotRun> {
   const { today, question, model, modelId } = input
   const capabilities = input.capabilities ?? {}
   let state = input.state
-  const tools = toolDefinitions(capabilities)
+  const allTools = toolDefinitions(capabilities)
+  const tools = input.onlyTools ? allTools.filter((t) => t.function.name === COMPOSE_TOOL || input.onlyTools!.includes(t.function.name)) : allTools
+  const composeOnly = allTools.filter((t) => t.function.name === COMPOSE_TOOL)
+  const offered = new Set(tools.map((t) => t.function.name))
   const paypalNames = new Set((capabilities.paypal?.tools ?? []).map((t) => t.function.name))
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history(input.turns),
-    { role: "user", content: `${contextLine(state, today)}\n\nQuestion: ${question}` },
+    { role: "user", content: `${contextLine(state, today)}${input.brief ? `\n\nFacts gathered for you:\n${input.brief}` : ""}\n\nQuestion: ${question}` },
   ]
-  const results: { name: string; input: unknown; answer: CopilotAnswer }[] = []
+  const results: { name: string; input: unknown; answer: CopilotAnswer }[] = [...(input.prefetched ?? [])]
   const proposals: ProposedApproval[] = []
   const actionTrace: { tool: string; input: string; output: string }[] = []
   const otherSources: string[] = []
@@ -234,7 +252,12 @@ export async function runLlmCopilot(input: {
   let finalText = ""
 
   for (let turn = 0; turn < MAX_TURNS && !composed; turn++) {
-    const response = await model.create({ model: modelId, messages, tools, tool_choice: "auto", temperature: 0.2, max_tokens: 4096 })
+    // On the last turn only compose_answer is offered, so a long loop still ends with an answer.
+    const lastTurn = turn === MAX_TURNS - 1
+    const response = await model.create({
+      model: modelId, messages, tools: lastTurn ? composeOnly : tools, tool_choice: "auto", temperature: 0.2, max_tokens: 2048,
+      ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
+    })
     usage.inputTokens += response.usage?.prompt_tokens ?? 0
     usage.outputTokens += response.usage?.completion_tokens ?? 0
     const choice = response.choices[0]
@@ -252,6 +275,7 @@ export async function runLlmCopilot(input: {
       const name = call.function.name
       const reply = (content: string) => messages.push({ role: "tool", tool_call_id: call.id, content })
       try {
+        if (!offered.has(name)) throw new CopilotToolError(`Tool ${name} is not available here.`)
         if (name === COMPOSE_TOOL) {
           composed = parseComposed(parseArguments(call))
           reply(composed ? "Answer recorded." : "ERROR: headline (string), paragraphs (array) and missing (array) are required.")
@@ -295,7 +319,8 @@ export async function runLlmCopilot(input: {
   }
 
   if (!composed && !finalText) {
-    return { ...rulesRun(state, today, question), proposals, fallbackReason: "The model did not produce an answer" }
+    const fallback = await (input.fallback ? input.fallback() : Promise.resolve(rulesRun(state, today, question)))
+    return { ...fallback, proposals: [...proposals, ...fallback.proposals], fallbackReason: "The model did not produce an answer" }
   }
   const final: Composed = composed ?? { headline: finalText.split("\n")[0].slice(0, 400), paragraphs: finalText.split(/\n+/).slice(1, 4), missing: [], primaryTool: "none" }
   const primary = results.find((r) => r.name === final.primaryTool && r.answer.table) ?? results.find((r) => r.answer.table)
@@ -327,7 +352,7 @@ export async function runLlmCopilot(input: {
   if (!results.length && !actionTrace.length && !answer.missing.length) answer.missing.push("No tool was run for this answer, so it contains no workspace figures.")
   const unverified = checkGrounding(
     [answer.headline, ...answer.paragraphs],
-    [...all.map(financeResultForModel), ...otherSources, contextLine(state, today), contextLine(input.state, today), question, ...input.turns.filter((t) => t.role === "user").map((t) => t.text)],
+    [...all.map(financeResultForModel), ...otherSources, contextLine(state, today), contextLine(input.state, today), input.brief ?? "", question,...input.turns.filter((t) => t.role === "user").map((t) => t.text)],
   )
   answer.grounding = { checked: true, unverified }
   if (unverified.length) answer.missing.push(`Not found in tool output — verify before relying on it: ${unverified.join(", ")}`)

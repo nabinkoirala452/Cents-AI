@@ -211,6 +211,27 @@ describe("LLM copilot agent", () => {
     expect(run.engine).toBe("rules")
   })
 
+  it("limits tools for small requests, grounds on the brief, and forces an answer on the last turn", async () => {
+    const capabilities: AgentCapabilities = {
+      proposeApproval: async () => ({ id: "AP-x", title: "t", status: "Pending", amount: 1, currency: "USD" }),
+      checkPaymentStatus: async () => ({}),
+    }
+    const loop = completion([{ name: "cash_outlook", args: { horizon_days: 7 } }])
+    const { model, calls } = scripted([
+      ...Array.from({ length: 7 }, () => loop),
+      (params) => {
+        expect(toolNames(params)).toEqual([COMPOSE_TOOL])
+        return compose("Overdue is $4,321 per the brief.")
+      },
+    ])
+    const run = await runLlmCopilot({ ...base, question: "Daily check", model, capabilities, onlyTools: [PROPOSE_REMINDER], brief: "- Overdue: $4,321", reasoningEffort: "low" })
+    expect(toolNames(calls[0]).sort()).toEqual([COMPOSE_TOOL, PROPOSE_REMINDER].sort())
+    expect(calls[0].reasoning_effort).toBe("low")
+    expect(String(calls[0].messages.at(-1)?.content)).toContain("Facts gathered for you")
+    expect(run.engine).toBe("llm")
+    expect(run.answer.grounding?.unverified).toEqual([])
+  })
+
   it("grounding accepts tool values regardless of sign and formatting", () => {
     expect(checkGrounding(["Balance −$1,250 and margin 18%"], ['{"figures":["Low: -$1,250","Margin: 18%"]}'])).toEqual([])
     expect(checkGrounding(["Paid $6,830"], ['{"value":"6830.00"}'])).toEqual([])
@@ -307,7 +328,7 @@ describe("copilot routes", () => {
     const body = response.json()
     expect(body.engine).toBe("rules")
     expect(body.proposals).toEqual([])
-    expect(body.answer.paragraphs.join(" ")).toContain("already open")
+    expect(body.answer.paragraphs.join(" ")).toContain(`Already waiting for approval: INV-${suffix}`)
     const events = await prisma.auditEvent.findMany({ where: { workspaceId, action: "Agent daily check" } })
     expect(events).toHaveLength(1)
   })

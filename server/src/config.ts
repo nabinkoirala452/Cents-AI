@@ -38,6 +38,7 @@ const environmentSchema = z.object({
   LLM_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
   LLM_MODEL: z.string().min(1).default("openai/gpt-oss-120b"),
   COPILOT_PAYPAL_TOOLS: booleanFromString.default(true),
+  LLM_REASONING_EFFORT: z.preprocess((value) => value === "" ? undefined : value, z.enum(["low", "medium", "high", "none"]).optional()),
 })
 
 const parsed = environmentSchema.safeParse(process.env)
@@ -81,4 +82,8 @@ export const config = {
   llmBaseUrl: parsed.data.LLM_BASE_URL,
   llmModel: parsed.data.LLM_MODEL,
   copilotPayPalTools: parsed.data.COPILOT_PAYPAL_TOOLS,
+  // gpt-oss models reason before answering; "low" keeps each turn inside free-tier token limits. "none" sends nothing.
+  llmReasoningEffort: (parsed.data.LLM_REASONING_EFFORT ?? (parsed.data.LLM_MODEL.includes("gpt-oss") ? "low" : "none")) === "none"
+    ? undefined
+    : (parsed.data.LLM_REASONING_EFFORT ?? "low") as "low" | "medium" | "high",
 } as const
