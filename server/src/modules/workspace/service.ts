@@ -160,18 +160,28 @@ export async function saveForecastAssumptions(ctx: RequestContext, assumptions: 
   }
 
   return prisma.$transaction(async (tx) => {
+    let changed = 0
     if (ids.length) {
       const invoices = await tx.invoice.findMany({
         where: { workspaceId: ctx.workspaceId, id: { in: ids } },
-        select: { id: true, status: true },
+        select: { id: true, status: true, expectedDelayOverride: true },
       })
       if (invoices.length !== ids.length || invoices.some((invoice) => invoice.status !== "Sent")) {
         throw new HttpError(409, "invoice_override_not_editable", "Receipt assumptions can only be changed for sent invoices.", "Conflict")
       }
+      // The form sends every sent invoice; write only the ones that changed, one query per distinct value,
+      // so a save stays well inside the transaction timeout on a remote database.
+      const current = new Map(invoices.map((invoice) => [invoice.id, invoice.expectedDelayOverride]))
+      const byValue = new Map<number | null, string[]>()
       for (const item of assumptions.invoiceOverrides) {
-        await tx.invoice.update({
-          where: { workspaceId_id: { workspaceId: ctx.workspaceId, id: item.id } },
-          data: { expectedDelayOverride: item.expectedDelayOverride },
+        if (current.get(item.id) === item.expectedDelayOverride) continue
+        byValue.set(item.expectedDelayOverride, [...(byValue.get(item.expectedDelayOverride) ?? []), item.id])
+      }
+      for (const [expectedDelayOverride, invoiceIds] of byValue) {
+        changed += invoiceIds.length
+        await tx.invoice.updateMany({
+          where: { workspaceId: ctx.workspaceId, id: { in: invoiceIds } },
+          data: { expectedDelayOverride },
         })
       }
     }
@@ -181,9 +191,9 @@ export async function saveForecastAssumptions(ctx: RequestContext, assumptions: 
     })
     await audit(ctx, {
       action: "Forecast assumptions updated",
-      detail: `Safety threshold and ${ids.length} sent-invoice receipt assumption(s) updated`,
+      detail: `Safety threshold and ${changed} sent-invoice receipt assumption(s) updated`,
       outcome: "success",
     }, tx)
     return { saved: true }
-  })
+  }, { timeout: 20_000 })
 }

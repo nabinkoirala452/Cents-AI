@@ -71,11 +71,28 @@ export function Sidebar({ page, open, close, signOut }: { page: PageId; open: bo
   )
 }
 
+/** Which Settings → Notifications switch controls each bell alert (by briefing priority id prefix). */
+const ALERT_SETTING: Record<string, string> = {
+  overdue: "Overdue invoice alerts",
+  breach: "Cash-flow threshold warnings",
+  payroll: "Payroll and contractor reminders",
+  subs: "Unusual expense alerts",
+}
+
+/** Alerts without a switch (approvals, margins) always show; a switch that was never set counts as on. */
+const alertEnabled = (notifications: Record<string, boolean>, id: string) => {
+  const setting = ALERT_SETTING[id.split("-")[0]]
+  return !setting || notifications[setting] !== false
+}
+
 export function Header({ page, dark, setDark, menu }: { page: PageId; dark: boolean; setDark: (v: boolean) => void; menu: () => void }) {
   const { state, today, actor, pendingRequests } = useStore()
   const [palette, setPalette] = useState(false)
   const [bell, setBell] = useState(false)
-  const alerts = useMemo(() => buildBriefing(state, today).priorities.slice(0, 6), [state, today])
+  const alerts = useMemo(
+    () => buildBriefing(state, today).priorities.filter((p) => alertEnabled(state.settings.notifications, p.id)).slice(0, 6),
+    [state, today],
+  )
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -171,7 +188,8 @@ function CommandPalette({ close }: { close: () => void }) {
       for (const t of state.transactions.slice(0, 200))
         if (match(t.description, t.party, t.id)) out.push({ group: "Transactions", label: t.description, detail: `${t.party} · ${money(t.amount)}`, to: `transactions?id=${t.id}` })
       for (const p of state.projects) if (match(p.name)) out.push({ group: "Projects", label: p.name, detail: clientOf(state, p.clientId).name, to: `projects?id=${p.id}` })
-      out.push({ group: "Ask", label: `Ask CentsAI: “${query.trim()}”`, detail: "Answer from your records", to: `copilot?q=${encodeURIComponent(query.trim())}` })
+      // Always keep the Ask row, even when many records match.
+      return [...out.slice(0, 13), { group: "Ask", label: `Ask CentsAI: “${query.trim()}”`, detail: "Answer from your records", to: `copilot?q=${encodeURIComponent(query.trim())}` }]
     }
     return out.slice(0, 14)
   }, [query, state])

@@ -15,7 +15,7 @@ const TABS = ["All", "Overdue", "Due soon", "Open", "Paid", "Draft"] as const
 type Tab = (typeof TABS)[number]
 
 export default function InvoicesPage() {
-  const { state, today, mode, paypalMode, paypalEnvironment } = useStore()
+  const { state, today, mode, paypalMode, paypalEnvironment, can } = useStore()
   const params = routeParams()
   const [tab, setTab] = useState<Tab>((TABS as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : "All")
   const [query, setQuery] = useState("")
@@ -49,7 +49,7 @@ export default function InvoicesPage() {
           <p>Bill clients, prioritise collections, and verify payments before they reach your ledger.</p>
         </div>
         <div className="intro-actions">
-          <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>
+          <Button variant="primary" icon={Plus} disabled={!can.prepare} onClick={() => setCreating(true)}>
             Create invoice
           </Button>
         </div>

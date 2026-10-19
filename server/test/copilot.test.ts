@@ -11,6 +11,7 @@ import {
   CHECK_PAYMENT,
   checkGrounding,
   COMPOSE_TOOL,
+  LOOKUP_INVOICE,
   PROPOSE_PAYPAL_SEND,
   PROPOSE_REMINDER,
   runLlmCopilot,
@@ -236,6 +237,84 @@ describe("LLM copilot agent", () => {
     expect(checkGrounding(["Balance −$1,250 and margin 18%"], ['{"figures":["Low: -$1,250","Margin: 18%"]}'])).toEqual([])
     expect(checkGrounding(["Paid $6,830"], ['{"value":"6830.00"}'])).toEqual([])
     expect(checkGrounding(["Up 20%"], ["Margin: 18%"])).toEqual(["20%"])
+  })
+
+  it("retries when the provider rejects a malformed tool call, then answers", async () => {
+    let attempts = 0
+    const model: CopilotModel = {
+      create: async () => {
+        attempts++
+        if (attempts === 1) throw Object.assign(new Error("400 Tool call validation failed: attempted to call tool 'commentary' which was not in request.tools"), { status: 400 })
+        return compose("Cash looks fine.")
+      },
+    }
+    const run = await runLlmCopilot({ ...base, question: "How is cash?", model })
+    expect(attempts).toBe(2)
+    expect(run.engine).toBe("llm")
+    expect(run.answer.headline).toBe("Cash looks fine.")
+  })
+
+  it("looks up invoices outside the context and maps CentsAI ids to PayPal ids for toolkit calls", async () => {
+    const sentToPayPal: string[] = []
+    const withPayPal = state.invoices.find((i) => i.paypal && i.status === "Sent")!
+    const bank = state.invoices.find((i) => !i.paypal)!
+    const capabilities: AgentCapabilities = {
+      paypal: {
+        tools: [{ type: "function", function: { name: "get_invoice", description: "Get a PayPal invoice", parameters: { type: "object", properties: { invoice_id: { type: "string" } } } } }],
+        call: async (call) => { sentToPayPal.push(JSON.parse(call.function.arguments).invoice_id); return '{"status":"SENT"}' },
+      },
+    }
+    const { model, calls } = scripted([
+      completion([{ name: LOOKUP_INVOICE, args: { invoice_id: withPayPal.id } }]),
+      (params) => {
+        expect(JSON.parse(String(toolReplies(params)[0].content))).toMatchObject({ id: withPayPal.id, paypalInvoiceId: withPayPal.paypal!.invoiceId })
+        return completion([{ name: "get_invoice", args: { invoice_id: withPayPal.id } }])
+      },
+      completion([{ name: "get_invoice", args: { invoice_id: bank.id } }]),
+      (params) => {
+        expect(String(toolReplies(params)[0].content)).toMatch(/^ERROR: .*not sent through PayPal/)
+        return compose("**Headline:** It is still unpaid.", "none", ["**Primary tool:** get_invoice.", "PayPal shows it as *sent*."])
+      },
+    ])
+    const run = await runLlmCopilot({ ...base, question: `Is ${withPayPal.id} paid?`, model, capabilities })
+    expect(toolNames(calls[0])).toContain(LOOKUP_INVOICE)
+    expect(sentToPayPal).toEqual([withPayPal.paypal!.invoiceId])
+    expect(run.answer.headline).toBe("It is still unpaid.")
+    expect(run.answer.paragraphs).toEqual(["PayPal shows it as sent."])
+  })
+
+  it("keeps approvals it already prepared on the error when the model fails afterwards", async () => {
+    const capabilities: AgentCapabilities = {
+      proposeApproval: async () => ({ id: "AP-before-fail", title: "Send payment reminder · INV-1042", status: "Pending", amount: 6830, currency: "USD" }),
+    }
+    let calls = 0
+    const model: CopilotModel = {
+      create: async () => {
+        calls++
+        if (calls === 1) return completion([{ name: PROPOSE_REMINDER, args: { invoice_id: overdue.id, message: "Hi Acme, INV-1042 is overdue." } }])
+        throw Object.assign(new Error("429 rate limited"), { status: 429 })
+      },
+    }
+    const failure = await runLlmCopilot({ ...base, question: "Chase Acme", model, capabilities }).catch((error: unknown) => error)
+    expect((failure as { proposals?: { id: string }[] }).proposals?.map((p) => p.id)).toEqual(["AP-before-fail"])
+  })
+
+  it("sends reminder drafts with placeholders back to the model instead of preparing them", async () => {
+    const proposed: string[] = []
+    const capabilities: AgentCapabilities = {
+      proposeApproval: async (_kind, _invoiceId, draft) => { proposed.push(draft ?? ""); return { id: "AP-ok", title: "Send payment reminder · INV-1042", status: "Pending", amount: 6830, currency: "USD" } },
+    }
+    const { model } = scripted([
+      completion([{ name: PROPOSE_REMINDER, args: { invoice_id: overdue.id, message: "Hi Acme, INV-1042 is overdue. Best regards, [Your Name]" } }]),
+      (params) => {
+        expect(String(toolReplies(params)[0].content)).toContain("placeholder ([Your Name])")
+        return completion([{ name: PROPOSE_REMINDER, args: { invoice_id: overdue.id, message: `Hi Acme, INV-1042 is overdue. Best regards, ${state.settings.ownerName}` } }])
+      },
+      compose("I prepared a reminder for INV-1042."),
+    ])
+    const run = await runLlmCopilot({ ...base, question: "Chase Acme", model, capabilities })
+    expect(proposed).toEqual([`Hi Acme, INV-1042 is overdue. Best regards, ${state.settings.ownerName}`])
+    expect(run.proposals.map((p) => p.id)).toEqual(["AP-ok"])
   })
 })
 

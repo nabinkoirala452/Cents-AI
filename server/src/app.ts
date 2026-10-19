@@ -127,8 +127,11 @@ export async function buildApp() {
         code: paypalError ? "paypal_error" : applicationError?.code ?? (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_ERROR"),
         detail: paypalError
           ? `PayPal request failed (HTTP ${paypalError.status ?? "unknown"})${paypalError.debugId ? ` · debug_id ${paypalError.debugId}` : ""}`
-          : status >= 500 && config.nodeEnv === "production"
-          ? "An unexpected error occurred."
+          // Unexpected server errors (database, library) are logged with the request id, never shown to users.
+          : status >= 500 && !applicationError
+          ? `An unexpected error occurred. Please try again (request ${request.id}).`
+          : fields
+          ? `Some fields are not valid: ${fields.map((field) => `${field.field || "body"} ${field.message}`).join("; ")}`.slice(0, 500)
           : error.message,
         ...(fields ? { fields } : {}),
       })

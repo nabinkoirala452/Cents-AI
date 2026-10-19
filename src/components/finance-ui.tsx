@@ -115,7 +115,7 @@ export function RiskAlert({ fc, threshold, link = true }: { fc: Forecast; thresh
 
 /** Priority actions with explainable evidence. Used by the dashboard and the briefing page. */
 export function PriorityList({ items, compact }: { items: Priority[]; compact?: boolean }) {
-  const { state, today, dismissInsight, prepareReminder, toast } = useStore()
+  const { state, today, dismissInsight, prepareReminder, toast, can } = useStore()
   const [expanded, setExpanded] = useState<string | null>(compact ? null : items[0]?.id ?? null)
 
   const draftReminders = async () => {
@@ -163,10 +163,11 @@ export function PriorityList({ items, compact }: { items: Priority[]; compact?: 
               <Button variant={compact ? "ghost" : "primary"} onClick={() => go(item.action.to)}>
                 {item.action.label} {compact && <ArrowRight size={13} />}
               </Button>
-              {!compact && item.secondary === "draft-reminders" && <Button onClick={draftReminders}>Draft reminders</Button>}
+              {!compact && item.secondary === "draft-reminders" && <Button disabled={!can.prepare} onClick={draftReminders}>Draft reminders</Button>}
               {!compact && (
                 <Button
                   variant="ghost"
+                  disabled={!can.edit}
                   onClick={async () => {
                     const res = await dismissInsight(item.id)
                     if (!res.ok) return toast(res.message)

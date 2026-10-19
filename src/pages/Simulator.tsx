@@ -92,7 +92,12 @@ export default function SimulatorPage() {
   const monthlyCost = type === "hire" ? x.amount + x.extraMonthly : type === "contractor" || type === "subscription" ? x.amount : 0
   const payroll = monthlyPayroll(state) + (type === "hire" ? x.amount : 0)
   const rec = receivables(state, today)
-  const verdict = after.firstBreach ? (base.firstBreach ? "Cash is already tight — this makes it worse" : "This pushes cash below your safety threshold") : "Affordable within your safety threshold"
+  const noImpact = after.lowest >= base.lowest - 0.5 && after.breachDays <= base.breachDays
+  const verdict = after.firstBreach
+    ? base.firstBreach
+      ? noImpact ? "Cash is already tight — this doesn't lower your lowest balance" : "Cash is already tight — this makes it worse"
+      : "This pushes cash below your safety threshold"
+    : "Affordable within your safety threshold"
   const lateInv = state.invoices.find((i) => i.id === x.invoiceId)
   const lostProject = state.projects.find((p) => p.id === x.projectId)
 

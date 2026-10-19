@@ -89,6 +89,27 @@ function SectionBody({ section }: { section: Section }) {
     }
     toast(`${section} saved`)
   })
+  const permissionsAction = useAction(async () => {
+    if (mode === "hosted") {
+      if (state.settings.role === "Owner") {
+        const res = await updateSettings({
+          team: draft.team.map((m) => ({ email: m.email, role: m.role })),
+          managerApprovalLimit: draft.managerApprovalLimit,
+        })
+        if (!res.ok) return toast(res.message)
+      }
+    } else {
+      await update((d) => {
+        d.settings.role = draft.role
+        if (state.settings.role === "Owner") {
+          d.settings.team = draft.team
+          d.settings.managerApprovalLimit = draft.managerApprovalLimit
+        }
+      })
+      await log({ actor, action: "Permissions updated", detail: `Acting as ${draft.role} · manager limit ${money(draft.managerApprovalLimit)}`, outcome: "warning" })
+    }
+    toast("Permissions saved")
+  })
   const actions = (fields: (keyof Settings)[]) => (
     <div className="settings-actions">
       <Button disabled={!dirty || saveAction.busy} onClick={() => setDraft(state.settings)}>
@@ -253,28 +274,10 @@ function SectionBody({ section }: { section: Section }) {
           </Button>
           <Button
             variant="primary"
-            disabled={!dirty}
-            onClick={async () => {
-              if (mode === "hosted") {
-                if (state.settings.role === "Owner") {
-                  const res = await updateSettings({
-                    team: draft.team.map((m) => ({ email: m.email, role: m.role })),
-                    managerApprovalLimit: draft.managerApprovalLimit,
-                  })
-                  if (!res.ok) return toast(res.message)
-                }
-              } else {
-                await update((d) => {
-                  d.settings.role = draft.role
-                  if (state.settings.role === "Owner") {
-                    d.settings.team = draft.team
-                    d.settings.managerApprovalLimit = draft.managerApprovalLimit
-                  }
-                })
-                await log({ actor, action: "Permissions updated", detail: `Acting as ${draft.role} · manager limit ${money(draft.managerApprovalLimit)}`, outcome: "warning" })
-              }
-              toast("Permissions saved")
-            }}
+            // Busy while saving, so two quick saves can't race and land out of order.
+            disabled={!dirty || permissionsAction.busy}
+            loading={permissionsAction.busy}
+            onClick={() => permissionsAction.run()}
           >
             Save changes
           </Button>
@@ -282,6 +285,7 @@ function SectionBody({ section }: { section: Section }) {
       </>
     )
 
+  if (section === "Security & Privacy")
   if (section === "Security & Privacy")
     return (
       <>
@@ -292,7 +296,7 @@ function SectionBody({ section }: { section: Section }) {
             ["Human approval", "Enforced", "Payments, PayPal sends, reminders and cancellations require approval; the agent can only prepare them."],
             ["Verify before record", "Enforced", "Ledger entries from PayPal are created only after a status check returns PAID."],
             ["Duplicate protection", "Idempotency keys", "One open request per action and record; repeated submissions are blocked."],
-            ["Credentials", "Backend only", "PayPal client secret is never sent to the browser (backend phase)."],
+            ["Credentials", "Backend only", "The PayPal client secret and LLM API key stay on the server and are never sent to the browser."],
             ["AI grounding", "Deterministic tools", "Numbers come from the finance engine; the AI explains and never invents figures."],
             ["Audit trail", `${state.audit.length} events`, "Requests, approvals, API results and edits are logged and exportable."],
           ].map(([a, b, c]) => (
@@ -313,7 +317,8 @@ function SectionBody({ section }: { section: Section }) {
 }
 
 function Integrations() {
-  const { state, log, toast, mode, paypalMode, paypalEnvironment, checkPayPalStatus } = useStore()
+  const { state, log, toast, mode, paypalMode, paypalEnvironment, checkPayPalStatus, copilotEngine } = useStore()
+  const llm = mode === "hosted" && copilotEngine === "llm"
   const [checking, setChecking] = useState(false)
   const paypalInvoices = state.invoices.filter((i) => i.paypal)
   const lastCheck = paypalInvoices.map((i) => i.paypal!.lastCheckedAt ?? "").sort().pop()
@@ -374,9 +379,15 @@ function Integrations() {
             <strong>AI model</strong>
             <small>Copilot reasoning layer</small>
           </div>
-          <Badge tone="blue">Rule-based</Badge>
-          <p>The prototype agent routes questions to finance tools. An LLM with tool calling replaces the router in the backend phase.</p>
-          <Button disabled>No model connection</Button>
+          <Badge tone={llm ? "green" : "blue"}>{llm ? "LLM agent" : "Rule-based"}</Badge>
+          <p>
+            {llm
+              ? "An LLM agent on the server calls the finance tools and PayPal read tools, and can prepare approvals. It never approves, sends or pays."
+              : mode === "hosted"
+              ? "No LLM key is configured on the server, so a rule-based router answers questions with the same finance tools."
+              : "This demo answers with a rule-based router over the finance tools. The hosted version adds the LLM agent."}
+          </p>
+          <Button onClick={() => (window.location.hash = "#/app/copilot")}>Open AI Copilot</Button>
         </div>
         <div>
           <div className="integration-icon">
@@ -410,7 +421,7 @@ function DataManagement() {
     }
   }
   const exports: [string, string, () => void][] = [
-    ["Transactions", "Ledger entries as CSV", () => download("centsai-transactions.csv", toCsv([["id", "date", "description", "party", "category", "type", "amount_inr", "status", "source", "reference"], ...state.transactions.map((t) => [t.id, t.date, t.description, t.party, t.category, t.type, t.amount, t.status, t.source, t.reference])]))],
+    ["Transactions", "Ledger entries as CSV", () => download("centsai-transactions.csv", toCsv([["id", "date", "description", "party", "category", "type", `amount_${state.settings.currency.toLowerCase()}`, "status", "source", "reference"], ...state.transactions.map((t) => [t.id, t.date, t.description, t.party, t.category, t.type, t.amount, t.status, t.source, t.reference])]))],
     ["Invoices", "All client invoices as CSV", () => download("centsai-invoices.csv", toCsv([["id", "client", "issue_date", "due_date", "currency", "amount", "status", "channel", "paypal_id"], ...state.invoices.map((i) => [i.id, clientOf(state, i.clientId).name, i.issueDate, i.dueDate, i.currency, invoiceTotal(i), i.status, i.channel, i.paypal?.invoiceId])]))],
     ["Audit log", "Approvals, API results and edits", () => { void exportAudit() }],
     ["Full workspace", "Everything as JSON (backend seed)", () => download("centsai-workspace.json", JSON.stringify(state, null, 2), "application/json")],

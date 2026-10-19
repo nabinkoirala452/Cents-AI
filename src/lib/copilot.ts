@@ -257,11 +257,11 @@ const latePaymentImpact: CopilotTool<{ client: string; days_late: number }> = {
     a.trace = trace
     const amount = open.reduce((sum, i) => sum + invoiceTotal(i), 0)
     a.paragraphs.push(
-      `${client.name} has ${open.length} open invoice${open.length > 1 ? "s" : ""} (${money(amount, open[0].currency)}). If they pay ${days} days later than usual, ${payroll ? `cash just after payroll on ${fmtDay(payroll.date)} would be ${money(afterPayroll)}` : "no payroll falls in the window"}.`,
-      `Lowest balance over 60 days: ${money(fc.lowest)} on ${fmtDay(fc.lowestDate)} (vs ${money(baseFc.lowest)} if they pay as usual).`,
+      `${client.name} has ${open.length} open invoice${open.length > 1 ? "s" : ""} (${money(amount, open[0].currency)}). If they pay ${days} days later than usual, ${payroll ? `the ${money(Math.abs(payroll.amount))} payroll on ${fmtDay(payroll.date)} is ${covered ? "paid in full" : "not fully covered"} and ${money(afterPayroll)} is left in the account after paying it, ${afterPayroll < s.safetyThreshold ? "BELOW" : "above"} your ${money(s.safetyThreshold)} safety threshold` : "no payroll falls in the window"}.`,
+      `Lowest balance over 60 days: ${money(fc.lowest)} on ${fmtDay(fc.lowestDate)} (vs ${money(baseFc.lowest)} if they pay as usual), which is ${fc.lowest < s.safetyThreshold ? "BELOW" : "above"} your ${money(s.safetyThreshold)} safety threshold.`,
     )
     a.figures.push(
-      { label: "Cash after payroll", value: money(afterPayroll), tone: afterPayroll < s.safetyThreshold ? "amber" : "green" },
+      { label: "Cash left after payroll is paid", value: money(afterPayroll), tone: afterPayroll < s.safetyThreshold ? "amber" : "green" },
       { label: "Lowest balance", value: money(fc.lowest), tone: fc.lowest < s.safetyThreshold ? "red" : "green" },
       { label: "Payroll", value: payroll ? money(-payroll.amount) : "—" },
     )
@@ -305,7 +305,7 @@ const receivablesTool: CopilotTool<{ reminders: boolean }> = {
       columns: ["Invoice", "Client", "Amount", "Status", "Why"],
       rows: [...rec.overdue, ...rec.dueSoon].map((r) => [r.inv.id, r.client.name, money(invoiceTotal(r.inv), r.inv.currency), r.state, r.reason]),
     }
-    a.records.push(...rec.overdue.map((r) => `${r.inv.id} · ${r.inv.paypal ? `PayPal ${r.inv.paypal.status}` : "bank transfer"}`))
+    a.records.push(...rec.overdue.map((r) => `${r.inv.id} · ${r.inv.paypal ? `PayPal status on file: ${r.inv.paypal.status}` : "bank transfer"}`))
     if (rec.overdue.length) a.actions.push({ label: "Prepare reminders for overdue invoices", kind: "draft-reminders" })
     a.actions.push({ label: "Open invoices", kind: "navigate", to: "invoices?tab=Overdue" })
     a.assumptions.push(`All amounts are shown in ${state.settings.currency}.`)

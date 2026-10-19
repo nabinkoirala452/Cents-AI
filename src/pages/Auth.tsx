@@ -13,6 +13,7 @@ export default function AuthPage({
 }) {
   const [submitted, setSubmitted] = useState(false)
   const [apiError, setApiError] = useState("")
+  const [resetNote, setResetNote] = useState("")
   const copy = {
     login: {
       eyebrow: "WELCOME BACK",
@@ -82,13 +83,16 @@ export default function AuthPage({
   return (
     <div className="auth-page">
       <div className="auth-brand-panel">
-        <Button
-          variant="ghost"
-          className="auth-back"
-          onClick={() => navigate("landing")}
-        >
-          <ArrowLeft size={14} /> Back to home
-        </Button>
+        {/* Hosted mode has no public landing page: signed-out visitors always see the login. */}
+        {storeMode === "demo" && (
+          <Button
+            variant="ghost"
+            className="auth-back"
+            onClick={() => navigate("landing")}
+          >
+            <ArrowLeft size={14} /> Back to home
+          </Button>
+        )}
         <Logo />
         <div className="auth-promise">
           <span className="section-kicker">FINANCE, MADE DECIDABLE</span>
@@ -121,6 +125,7 @@ export default function AuthPage({
           <p className="auth-description">{copy.description}</p>
 
           {(authMessage || apiError) && <p className="registration-note" role="alert">{apiError || authMessage}</p>}
+          {resetNote && <p className="registration-note" role="status">{resetNote}</p>}
 
           {storeMode === "hosted" && (mode === "signup" || mode === "register") && (
             <p className="registration-note" role="status">
@@ -146,7 +151,13 @@ export default function AuthPage({
               <label>
                 <span className="label-row">
                   Password
-                  <Button variant="ghost" type="button">
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => setResetNote(storeMode === "hosted"
+                      ? "Password resets aren't self-service yet. Ask your workspace Owner to reset your password."
+                      : "This demo signs you in with the prefilled password — no reset needed.")}
+                  >
                     Forgot password?
                   </Button>
                 </span>
@@ -266,8 +277,6 @@ export default function AuthPage({
               )}
             </Button>
           )}
-
-          {apiError && <p className="auth-error" role="alert">{apiError}</p>}
 
           {(storeMode === "demo" || mode !== "register") && (
             <div className="auth-switch">

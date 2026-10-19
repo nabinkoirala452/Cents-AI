@@ -109,7 +109,16 @@ async function runAgent(ctx: RequestContext, state: State, today: string, questi
   } catch (error) {
     // The deterministic router still answers, and says so, if the LLM is unavailable.
     log.warn({ err: error }, "Copilot LLM call failed; answering with the rule-based router")
-    return { ...(await fallback()), fallbackReason: reasonFor(error) }
+    const run = await fallback()
+    const prepared = (error as { proposals?: ProposedApproval[] } | null)?.proposals ?? []
+    if (prepared.length) {
+      run.proposals = [...prepared, ...run.proposals]
+      run.answer.records.unshift(...prepared.map((p) => `${p.id} · ${p.title} · ${p.status}`))
+      run.answer.paragraphs.unshift(`Before the AI model stopped, it prepared ${prepared.length} approval${prepared.length > 1 ? "s" : ""} (${prepared.map((p) => p.title).join("; ")}). ${prepared.length > 1 ? "They are" : "It is"} waiting in Approvals; nothing was sent.`)
+      const review: CopilotAnswer["actions"][number] = { label: `Review ${prepared.length} prepared approval${prepared.length > 1 ? "s" : ""}`, kind: "navigate", to: "approvals" }
+      run.answer.actions = [review, ...run.answer.actions].slice(0, 4)
+    }
+    return { ...run, fallbackReason: reasonFor(error) }
   }
 }
 
@@ -152,11 +161,14 @@ type DailyFacts = {
   paymentChecks: CopilotAnswer["trace"]
   candidates: ReturnType<typeof receivables>["overdue"]
   alreadyOpen: string[]
+  /** PayPal has no record of these invoices, so a PayPal reminder could never be sent. */
+  missingAtPayPal: string[]
 }
 
 /** Code does the fact-finding and PayPal checks; the model only decides on reminders and writes them. */
 async function gatherDailyFacts(ctx: RequestContext, state: State, today: string, capabilities: AgentCapabilities): Promise<DailyFacts> {
   const paymentChecks: CopilotAnswer["trace"] = []
+  const missingAtPayPal: string[] = []
   let recorded = false
   const rec = receivables(state, today)
   for (const r of [...rec.overdue, ...rec.dueSoon]) {
@@ -166,13 +178,20 @@ async function gatherDailyFacts(ctx: RequestContext, state: State, today: string
       recorded ||= (result.insertedPayments ?? 0) > 0
       paymentChecks.push({ tool: "paypal.verify_payment", input: r.inv.id, output: `PayPal ${result.status ?? "unknown"}${result.paid ? " · paid and recorded" : ""}` })
     } catch (error) {
+      if (error instanceof HttpError && error.code === "paypal_invoice_not_found") missingAtPayPal.push(r.inv.id)
       paymentChecks.push({ tool: "paypal.verify_payment", input: r.inv.id, output: error instanceof HttpError ? error.message : "PayPal check failed" })
     }
   }
   const current = recorded && capabilities.reloadState ? await capabilities.reloadState() : state
   const open = new Set(current.approvals.filter((a) => a.kind === "send_reminder" && (a.status === "Pending" || a.status === "Submitted")).map((a) => a.refId))
   const overdue = receivables(current, today).overdue
-  return { state: current, paymentChecks, candidates: overdue.filter((r) => !open.has(r.inv.id)), alreadyOpen: overdue.filter((r) => open.has(r.inv.id)).map((r) => r.inv.id) }
+  return {
+    state: current,
+    paymentChecks,
+    candidates: overdue.filter((r) => !open.has(r.inv.id) && !missingAtPayPal.includes(r.inv.id)),
+    alreadyOpen: overdue.filter((r) => open.has(r.inv.id)).map((r) => r.inv.id),
+    missingAtPayPal,
+  }
 }
 
 const briefFor = (facts: DailyFacts, prefetched: { answer: CopilotAnswer }[]) => [
@@ -180,13 +199,17 @@ const briefFor = (facts: DailyFacts, prefetched: { answer: CopilotAnswer }[]) =>
   `- PayPal checks: ${facts.paymentChecks.map((c) => `${c.input} → ${c.output}`).join("; ") || "no PayPal invoices to check"}`,
   `- Needs a reminder: ${facts.candidates.map((r) => `${r.inv.id} (${r.client.name}, ${money(invoiceTotal(r.inv), r.inv.currency)}, due ${r.inv.dueDate}, ${r.reason}, ${r.inv.paypal ? "PayPal" : "bank transfer"}${r.inv.reminders.length ? `, last reminder ${r.inv.reminders.at(-1)!.date}` : ""})`).join("; ") || "none"}`,
   `- Already waiting for approval: ${facts.alreadyOpen.join(", ") || "none"}`,
+  `- PayPal has no record of (do not remind; tell the user to check these invoices' PayPal link): ${facts.missingAtPayPal.join(", ") || "none"}`,
 ].join("\n")
 
 /** Deterministic daily check used when no LLM is configured (or it fails): template reminder text. */
 async function rulesDailyCheck(today: string, facts: DailyFacts, capabilities: AgentCapabilities): Promise<CopilotRun> {
   const proposals: ProposedApproval[] = []
   const trace: CopilotAnswer["trace"] = [...facts.paymentChecks]
-  const notes: string[] = facts.alreadyOpen.length ? [`Already waiting for approval: ${facts.alreadyOpen.join(", ")}.`] : []
+  const notes: string[] = [
+    ...(facts.alreadyOpen.length ? [`Already waiting for approval: ${facts.alreadyOpen.join(", ")}.`] : []),
+    ...(facts.missingAtPayPal.length ? [`PayPal has no record of ${facts.missingAtPayPal.join(", ")}, so no reminder was prepared; check their PayPal links.`] : []),
+  ]
   for (const r of facts.candidates) {
     if (!capabilities.proposeApproval) break
     try {
@@ -235,6 +258,9 @@ export async function runDailyCheck(ctx: RequestContext, log: FastifyBaseLogger)
     prefetched,
   })
   if (run.engine === "llm") run.answer.trace.unshift(...facts.paymentChecks)
+  if (run.engine === "llm" && facts.missingAtPayPal.length) {
+    run.answer.missing.push(`PayPal has no record of ${facts.missingAtPayPal.join(", ")}; no reminder was prepared. Check their PayPal invoice links.`)
+  }
   // The daily check already prepared every reminder it should; don't offer to draft them again.
   run.answer.actions = run.answer.actions.filter((a) => a.kind !== "draft-reminders")
   if (facts.alreadyOpen.length && !run.answer.actions.some((a) => a.kind === "navigate" && a.to === "approvals")) run.answer.actions.unshift({ label: "Review approvals", kind: "navigate", to: "approvals" })

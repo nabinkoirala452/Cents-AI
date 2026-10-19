@@ -229,7 +229,7 @@ function ReviewModal({ approval: a, close }: { approval: Approval; close: () => 
           <div className="modal-actions">
             <Button
               icon={X}
-              disabled={rejectAction.busy || approveAction.busy}
+              disabled={s.role === "Viewer" || rejectAction.busy || approveAction.busy}
               loading={rejectAction.busy}
               onClick={() => rejectAction.run()}
             >
@@ -249,7 +249,8 @@ function ReviewModal({ approval: a, close }: { approval: Approval; close: () => 
       )}
       {a.status === "Submitted" && a.kind === "record_contractor_payment" && (
         <>
-          <Field label="Bank transfer reference">
+          <Field label="Bank transfer reference" hint="Required — paste the reference from your bank to enable Confirm transfer.">
+
             <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. ACH-20261017-98765" />
           </Field>
           <div className="modal-actions">

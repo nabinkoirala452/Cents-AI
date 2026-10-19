@@ -222,9 +222,16 @@ export const api = {
   reviewRecurringCost: (id: string) => apiFetch(idPath("recurring-costs", id) + "/review", json("POST")),
   createLoan: (body: Omit<Loan, "id">) => apiFetch<Loan>("/loans", json("POST", body)),
   patchLoan: (id: string, body: Partial<Loan>) => apiFetch<Loan>(idPath("loans", id), json("PATCH", body)),
-  createOffer: (body: Omit<LoanOffer, "id">) => apiFetch<LoanOffer>("/financing/offers", json("POST", body)),
+  // The server schemas are strict and assign id/createdAt themselves, so send only the accepted fields.
+  createOffer: ({ name, principal, rate, months, fees }: Omit<LoanOffer, "id">) =>
+    apiFetch<LoanOffer>("/financing/offers", json("POST", { name, principal, rate, months, fees })),
   deleteOffer: (id: string) => apiFetch(idPath("financing/offers", id), json("DELETE")),
-  createScenario: (body: Omit<SavedScenario, "id">) => apiFetch<SavedScenario>("/scenarios", json("POST", body)),
+  createScenario: ({ name, type, inputs }: Omit<SavedScenario, "id" | "createdAt">) =>
+    apiFetch<SavedScenario>("/scenarios", json("POST", {
+      name,
+      type,
+      inputs: Object.fromEntries(Object.entries(inputs).filter(([, value]) => typeof value === "string" || (typeof value === "number" && Number.isFinite(value)))),
+    })),
   deleteScenario: (id: string) => apiFetch(idPath("scenarios", id), json("DELETE")),
   forecast: (query = "") => apiFetch<unknown>(`/cashflow/forecast${query ? `?${query}` : ""}`),
   dashboardSummary: (horizon?: number) =>

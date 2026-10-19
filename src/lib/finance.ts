@@ -585,12 +585,13 @@ export const buildBriefing = (state: State, today: string, horizonDays: number =
   }
 
   if (exp30.change > 10) {
+    const subFlags = exp30.flags.filter((f) => f.kind !== "duplicate").length
     priorities.push({
       id: `subs-${Math.round(exp30.current)}`,
       severity: "low",
-      title: "Review increasing software costs",
+      title: subFlags ? "Review increasing software costs" : "Software costs went up",
       amount: `+${pct(exp30.change, 0)}`,
-      detail: `Subscriptions are ${money(exp30.current)}/month vs ${money(exp30.previous)} last month. ${exp30.flags.filter((f) => f.kind !== "duplicate").length} items are flagged for review.`,
+      detail: `Subscriptions are ${money(exp30.current)}/month vs ${money(exp30.previous)} last month. ${subFlags ? `${subFlags} item${subFlags > 1 ? "s are" : " is"} flagged for review.` : "The increases have already been reviewed."}`,
       evidence: exp30.flags.filter((f) => f.kind !== "duplicate").map((f) => f.title).join(" · "),
       calculation: "Current monthly-equivalent subscription cost vs previous charges",
       changeIf: "A subscription is cancelled or marked as reviewed",

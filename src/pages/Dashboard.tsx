@@ -11,7 +11,7 @@ import { go } from "../lib/router"
 import { useStore } from "../lib/store"
 
 export default function Dashboard() {
-  const { state, today } = useStore()
+  const { state, today, actor } = useStore()
   const s = state.settings
   const [range, setRange] = useState<7 | 30 | 90>(s.defaultHorizon)
   const brief = useMemo(() => buildBriefing(state, today, range), [state, today, range])
@@ -46,7 +46,7 @@ export default function Dashboard() {
       <div className="page-intro">
         <div>
           <Title>
-            {greeting()}, {s.ownerName.split(" ")[0]}
+            {greeting()}, {(actor || s.ownerName).split(" ")[0]}
           </Title>
           <p>Here is your agency’s financial position and what needs your attention.</p>
         </div>
@@ -74,7 +74,7 @@ export default function Dashboard() {
           positive={month.incomeChange > 0}
         />
         <MetricCard label="Money Out This Month" value={money(month.current.expense)} detail={`${month.expenseChange >= 0 ? "+" : ""}${pct(month.expenseChange)} vs same days last month`} />
-        <MetricCard label={`Projected Cash · ${range} days`} value={money(all.expected.end)} detail={`Conservative low ${money(all.conservative.lowest)}`} forecast tone={all.conservative.lowest < s.safetyThreshold ? "amber" : undefined} />
+        <MetricCard label={`Projected Cash · ${range} days`} value={money(Math.round(all.expected.end))} detail={`Conservative low ${money(all.conservative.lowest)}`} forecast tone={all.conservative.lowest < s.safetyThreshold ? "amber" : undefined} />
       </div>
       <div className="dashboard-grid">
         <div className="dashboard-main">
@@ -83,7 +83,7 @@ export default function Dashboard() {
             <div className="chart-summary">
               <div>
                 <span>Expected cash on {fmtDay(all.expected.series[all.expected.series.length - 1].date)}</span>
-                <strong>{money(all.expected.end)}</strong>
+                <strong>{money(Math.round(all.expected.end))}</strong>
               </div>
               <ChartLegend
                 items={[
