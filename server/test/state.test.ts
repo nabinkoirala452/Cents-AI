@@ -59,7 +59,7 @@ describe("loadState", () => {
       const loaded = actualInvoices.get(invoice.id)!
       expect(invoiceTotal(loaded)).toBe(loaded.lineItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0))
       expect(invoiceTotal(loaded)).toBe(invoiceTotal(invoice))
-      if (invoice.channel === "PayPal") expect(loaded.paypal).toBeUndefined()
+      expect(loaded.paypal).toEqual(invoice.paypal)
     }
     const actualTransactions = new Map(actual.transactions.map((transaction) => [transaction.id, transaction]))
     for (const transaction of expected.transactions) {
