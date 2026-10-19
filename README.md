@@ -46,7 +46,7 @@ The frontend runs in two modes:
 ## Security design
 
 - **Permission tiers.** *Owner* can do everything. *Finance Manager* can prepare actions and approve up to the workspace limit (default $6,000). *Viewer* is read-only and can ask the Copilot. Roles are enforced on the server for every route, not just hidden in the UI.
-- **Maker-checker.** Nobody approves their own request. Items the agent prepares are marked "CentsAI agent (for &lt;user&gt;)", so the user it acted for can't approve them either.
+- **Maker-checker.** A Finance Manager can't approve a request they prepared, including one the agent prepared on their behalf (marked "CentsAI agent (for &lt;user&gt;)"). The Owner is the final authority and can approve any request.
 - **The AI can't move money.** The agent's only write actions create a *Pending* approval. The PayPal Agent Toolkit is restricted to read actions by an allowlist; send, remind, cancel, refund and pay tools are never exposed.
 - **No hallucinated numbers.** Figures and tables come straight from tool output. Every `$` amount and `%` in the model's wording is checked against tool results. Unmatched figures are flagged as "verify before relying on it" in the UI and in the audit event.
 - **Tamper-checked execution.** Approval data (recipient, amount, steps) is built from database records, not request bodies. A record hash is re-verified under row locks before execution. Requests take idempotency keys, so a retried call can't send twice.

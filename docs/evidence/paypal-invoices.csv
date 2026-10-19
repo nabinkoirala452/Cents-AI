@@ -1,0 +1,8 @@
+"id","status","paypalInvoiceId","paypalStatus","paypalPayerUrl","paypalSentAt","paypalLastCheckedAt","paidDate"
+"INV-1036","Paid","INV2-6GHC-EBKK-B9G7-WCQR","PAID","https://www.sandbox.paypal.com/invoice/p/#6GHCEBKKB9G7WCQR","2026-08-22T05:00:00.000Z","2026-08-22T05:02:00.000Z","2026-09-04"
+"INV-1041","Paid","INV2-63PC-PG6S-2SUC-LUGJ","PAID","https://www.sandbox.paypal.com/invoice/p/#63PCPG6S2SUCLUGJ","2026-09-19T05:00:00.000Z","2026-09-19T05:02:00.000Z","2026-10-07"
+"INV-1042","Paid","INV2-9FGB-X2YC-3MW9-QYTU","PAID","https://www.sandbox.paypal.com/invoice/p/#9FGBX2YC3MW9QYTU","2026-09-29T05:00:00.000Z","2026-10-19T19:48:48.880Z","2026-10-19"
+"INV-1048","Paid","INV2-4PGN-34BL-GUNZ-75LY","PAID","https://www.sandbox.paypal.com/invoice/p/#4PGN34BLGUNZ75LY","2026-10-03T05:00:00.000Z","2026-10-19T19:49:25.582Z","2026-10-19"
+"INV-1053","Paid","INV2-AJND-WGVH-FDRB-JAJS","PAID","https://www.sandbox.paypal.com/invoice/p/#AJNDWGVHFDRBJAJS","2026-08-30T05:00:00.000Z","2026-08-30T05:02:00.000Z","2026-09-19"
+"INV-1056","Paid","INV2-NP2U-6GGN-Q3T5-DJP6","PAID","https://www.sandbox.paypal.com/invoice/p/#NP2U6GGNQ3T5DJP6","2026-10-17T05:00:00.000Z","2026-10-19T18:44:25.859Z","2026-10-19"
+"INV-1059","Draft","INV2-RZPL-XFXC-BRG7-P4UU","DRAFT","https://www.sandbox.paypal.com/invoice/p/#RZPLXFXCBRG7P4UU","","",""

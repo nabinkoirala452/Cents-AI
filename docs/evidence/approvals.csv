@@ -1,0 +1,7 @@
+"id","kind","title","refId","amount","currency","preparedBy","preparedByAgent","requestedAt","status","decidedBy","decidedAt","result"
+"AP-3101","paypal_send_invoice","Send PayPal invoice · INV-1056","INV-1056","12080","USD","Alex Kumar","false","2026-10-17T15:22:08.508Z","Verified","Alex Kumar","2026-10-17T16:22:08.508Z","PayPal status SENT · INV2-NP2U-6GGN-Q3T5-DJP6"
+"AP-3103","record_contractor_payment","Pay contractor invoice · SN-2026-118","CB-221","4380","USD","Neha Shah","false","2026-10-19T15:18:08.508Z","Pending","","",""
+"AP-3104","send_reminder","Send payment reminder · INV-1042","INV-1042","6830","USD","CentsAI agent","true","2026-10-19T16:10:08.508Z","Stale","System","2026-10-19T18:38:16.916Z",""
+"AP-69668ba3-f674-4e79-87cd-49b933af3bc7","send_reminder","Send payment reminder · INV-1048","INV-1048","3780","USD","CentsAI agent (for Neha Shah)","true","2026-10-19T18:27:59.835Z","Rejected","System","2026-10-19T19:49:28.470Z",""
+"AP-0458baa5-4295-4504-8bdd-2a870731dbc8","paypal_send_invoice","Send PayPal invoice · INV-1058","INV-1058","6000","USD","Neha Shah","false","2026-10-19T18:33:38.214Z","Pending","","",""
+"AP-1d715d5f-3e36-4bcc-8d41-6b5ffc420a4f","paypal_send_invoice","Send PayPal invoice · INV-1059","INV-1059","12080","USD","Neha Shah","false","2026-10-19T18:36:49.428Z","Failed","Alex Kumar","2026-10-19T18:40:02.661Z","PayPal reported invoice status SCHEDULED"
