@@ -144,26 +144,26 @@ export function createSeed(): State {
   })
 
   const pp = (id: string, status: PayPalStatus, sentAt: string): PayPalLink => ({
-    invoiceId: id, status, payerUrl: `https://www.sandbox.paypal.com/invoice/p/#${id}`, sentAt: new Date(`${sentAt}T10:30:00`).toISOString(), lastCheckedAt: new Date(`${sentAt}T10:32:00`).toISOString(),
+    invoiceId: id, status, payerUrl: `https://www.sandbox.paypal.com/invoice/p/#${id.replace(/^INV2-/, "").replace(/-/g, "")}`, sentAt: new Date(`${sentAt}T10:30:00`).toISOString(), lastCheckedAt: new Date(`${sentAt}T10:32:00`).toISOString(),
   })
 
   const invoices: Invoice[] = [
     inv("INV-1030", "c-spring", "p-seo", "Retainer", d(-68), d(-58), "USD", "SEO retainer · monthly", 9380, "Paid", { paidDate: d(-58), channel: "Bank transfer" }),
     inv("INV-1033", "c-grey", undefined, "Project", d(-55), d(-40), "USD", "Brand refresh workshop", 6000, "Paid", { paidDate: d(-40) }),
-    inv("INV-1036", "c-horizon", "p-mvp", "Milestone", d(-58), d(-45), "USD", "Discovery sprint", 9450, "Paid", { paidDate: d(-45), paypal: { ...pp("INV2-H7QK-2LMB-9XRA-4TCE", "PAID", d(-58)), payerPaid: true } }),
+    inv("INV-1036", "c-horizon", "p-mvp", "Milestone", d(-58), d(-45), "USD", "Discovery sprint", 9450, "Paid", { paidDate: d(-45), paypal: { ...pp("INV2-6GHC-EBKK-B9G7-WCQR", "PAID", d(-58)), payerPaid: true } }),
     inv("INV-1038", "c-north", "p-erp", "Milestone", d(-62), d(-50), "USD", "ERP discovery & solution design", 5000, "Paid", { paidDate: d(-50) }),
     inv("INV-1039", "c-spring", "p-seo", "Retainer", d(-38), d(-28), "USD", "SEO retainer · monthly", 9380, "Paid", { paidDate: d(-29), channel: "Bank transfer" }),
-    inv("INV-1041", "c-pixel", "p-web", "Milestone", d(-30), d(-16), "USD", "Website revamp · design milestone", 7560, "Paid", { paidDate: d(-12), paypal: { ...pp("INV2-P3WD-8KZQ-1MNE-7YUA", "PAID", d(-30)), payerPaid: true } }),
+    inv("INV-1041", "c-pixel", "p-web", "Milestone", d(-30), d(-16), "USD", "Website revamp · design milestone", 7560, "Paid", { paidDate: d(-12), paypal: { ...pp("INV2-63PC-PG6S-2SUC-LUGJ", "PAID", d(-30)), payerPaid: true } }),
     inv("INV-1042", "c-acme", "p-orion", "Milestone", d(-20), d(-5), "USD", "Project Orion · build milestone 2", 6830, "Sent", {
-      paypal: pp("INV2-A9LX-4RTE-6QPC-2VNB", "SENT", d(-20)),
+      paypal: pp("INV2-9FGB-X2YC-3MW9-QYTU", "SENT", d(-20)),
       reminders: [{ date: d(-2), channel: "PayPal reminder", note: "Friendly reminder sent after owner approval" }],
     }),
     inv("INV-1044", "c-north", "p-erp", "Milestone", d(-25), d(-10), "USD", "ERP integration · milestone 1", 7500, "Paid", { paidDate: d(-9) }),
     inv("INV-1046", "c-spring", "p-seo", "Retainer", d(-8), d(2), "USD", "SEO retainer · monthly", 9380, "Sent", { channel: "Bank transfer" }),
-    inv("INV-1048", "c-pixel", "p-web", "Milestone", d(-16), d(-2), "USD", "Website revamp · build milestone", 3780, "Sent", { paypal: pp("INV2-P8RT-2CXN-5LWQ-3EHJ", "SENT", d(-16)) }),
+    inv("INV-1048", "c-pixel", "p-web", "Milestone", d(-16), d(-2), "USD", "Website revamp · build milestone", 3780, "Sent", { paypal: pp("INV2-4PGN-34BL-GUNZ-75LY", "SENT", d(-16)) }),
     inv("INV-1051", "c-north", "p-erp", "Milestone", d(-12), d(3), "USD", "ERP integration · milestone 2", 7500, "Sent"),
-    inv("INV-1053", "c-acme", "p-orion", "Milestone", d(-50), d(-35), "USD", "Project Orion · build milestone 1", 12080, "Paid", { paidDate: d(-30), paypal: { ...pp("INV2-A2MC-7HQE-3XKD-8RWP", "PAID", d(-50)), payerPaid: true } }),
-    inv("INV-1056", "c-horizon", "p-mvp", "Milestone", d(-2), d(12), "USD", "Mobile MVP · milestone 1", 12080, "Sent", { paypal: pp("INV2-H4ZN-9WQC-5TBA-1LKE", "SENT", d(-2)) }),
+    inv("INV-1053", "c-acme", "p-orion", "Milestone", d(-50), d(-35), "USD", "Project Orion · build milestone 1", 12080, "Paid", { paidDate: d(-30), paypal: { ...pp("INV2-AJND-WGVH-FDRB-JAJS", "PAID", d(-50)), payerPaid: true } }),
+    inv("INV-1056", "c-horizon", "p-mvp", "Milestone", d(-2), d(12), "USD", "Mobile MVP · milestone 1", 12080, "Sent", { paypal: pp("INV2-NP2U-6GGN-Q3T5-DJP6", "SENT", d(-2)) }),
     inv("INV-1058", "c-grey", undefined, "Project", d(1), d(16), "USD", "Brand guidelines refresh", 6000, "Draft"),
     inv("INV-1059", "c-horizon", "p-mvp", "Milestone", d(20), d(34), "USD", "Mobile MVP · milestone 2", 12080, "Draft"),
   ]
@@ -254,7 +254,7 @@ export function createSeed(): State {
       id: "AP-3104", kind: "send_reminder", title: "Send payment reminder · INV-1042", recipient: "Acme Technologies",
       amount: 6830, currency: "USD", refId: "INV-1042", preparedBy: "CentsAI agent", preparedByAgent: true,
       requestedAt: minutesAgo(12), status: "Pending", idempotencyKey: "rem-INV-1042-001",
-      steps: ["Send a PayPal reminder for INV2-A9LX-4RTE-6QPC-2VNB", "Log the reminder on the invoice timeline", "Keep the receipt marked uncertain in the forecast"],
+      steps: ["Send a PayPal reminder for INV2-9FGB-X2YC-3MW9-QYTU", "Log the reminder on the invoice timeline", "Keep the receipt marked uncertain in the forecast"],
       draft: "Hi Acme Technologies team,\n\nA quick reminder that invoice INV-1042 for $6,830 (Project Orion · build milestone 2) was due 5 days ago. You can pay securely through the PayPal link on the invoice.\n\nIf payment is already on its way, please ignore this note — and thank you!\n\nBest regards,\nAlex Kumar\nMeridian Digital Studio",
     },
     {
@@ -268,7 +268,7 @@ export function createSeed(): State {
       amount: 12080, currency: "USD", refId: "INV-1056", preparedBy: "Alex Kumar",
       requestedAt: minutesAgo(60 * 49), status: "Verified", idempotencyKey: "send-INV-1056-001",
       steps: ["Create the invoice in PayPal Sandbox", "Send it to billing@horizonlabs.example", "Verify PayPal reports status SENT"],
-      decidedBy: "Alex Kumar", decidedAt: minutesAgo(60 * 48), result: "PayPal status SENT · INV2-H4ZN-9WQC-5TBA-1LKE",
+      decidedBy: "Alex Kumar", decidedAt: minutesAgo(60 * 48), result: "PayPal status SENT · INV2-NP2U-6GGN-Q3T5-DJP6",
     },
   ]
 
