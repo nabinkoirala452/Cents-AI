@@ -19,6 +19,12 @@ Built for **FinTechathon 2026 — Topic E: SME Finance Copilot**.
 | **AI agent** | LLM agent (Groq `openai/gpt-oss-120b`, any OpenAI-compatible provider) with ten read-only finance tools plus read-only **PayPal Agent Toolkit** tools. It answers questions such as *"Can we cover payroll if Acme pays 30 days late?"* and runs a **daily check** that verifies PayPal status for overdue invoices and drafts reminder messages for approval |
 | **Approvals & audit** | Maker-checker approvals with role limits, an append-only audit log and CSV export of every recommendation, approval, PayPal API call and verified result |
 
+## Documentation
+
+- [**Technical documentation**](docs/TECHNICAL.md): system architecture, core algorithms (forecast, simulations, margins, loans, grounding check, payment reconciliation) and security design
+- [`server/README.md`](server/README.md): API, PayPal and agent reference
+- [E2E test report](docs/testing/CentsAI-E2E-Test-Report-2026-10-19.xlsx): 159 browser test cases
+
 ## Architecture
 
 ```
