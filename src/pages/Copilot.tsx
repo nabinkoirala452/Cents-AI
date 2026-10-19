@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, Bot, Check, ChevronDown, Database, Eraser, Send, ShieldCheck, Sparkles, Wrench } from "lucide-react"
-import { Badge, Button, Card, CardHeader, Input, Title } from "../components/ui"
+import { ApprovalGroup } from "../components/approval-card"
+import { Badge, Button, Card, CardHeader, Input, Title, useAction } from "../components/ui"
 import { api, hostedMode } from "../lib/api"
 import { answerQuestion, SUGGESTED_QUESTIONS, type CopilotAction, type CopilotAnswer } from "../lib/copilot"
 import { buildEvents, cashBalance, receivables } from "../lib/finance"
@@ -13,15 +14,19 @@ export default function CopilotPage() {
   const { state, today, update, prepareReminder, toast, can, copilotEngine, refresh } = useStore()
   const [message, setMessage] = useState("")
   const [thinking, setThinking] = useState<string | null>(null)
+  const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [workingBubble, setWorkingBubble] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const asked = useRef(false)
 
   const stateRef = useRef(state)
   stateRef.current = state
 
+  const isBusy = Boolean(thinking || busyAction || workingBubble)
+
   const ask = (question: string) => {
     const q = question.trim()
-    if (!q || thinking) return
+    if (!q || isBusy) return
     const userMsg: ChatMessage = { id: `m-${Date.now()}`, role: "user", text: q }
     update((d) => {
       d.chat.push(userMsg)
@@ -36,8 +41,15 @@ export default function CopilotPage() {
       }))
       api.askCopilot(q, history)
         .then(async ({ answer, proposals }) => {
+          const approvalIds = proposals?.map((p) => p.id) ?? []
           await update((d) => {
-            d.chat.push({ id: `m-${Date.now()}-a`, role: "assistant", text: answer.headline, answer })
+            d.chat.push({
+              id: `m-${Date.now()}-a`,
+              role: "assistant",
+              text: answer.headline,
+              answer: { ...answer, approvalIds },
+              approvalIds,
+            })
           })
           // The agent may have prepared approvals or recorded a verified PayPal payment.
           if (proposals.length || answer.trace.some((t) => t.tool === "paypal.verify_payment")) await refresh().catch(() => undefined)
@@ -58,25 +70,37 @@ export default function CopilotPage() {
     }, 900)
   }
 
-  const runDailyCheck = () => {
-    if (thinking) return
-    setThinking("daily check")
-    void update((d) => {
+  const dailyCheckAction = useAction(async () => {
+    if (isBusy) return
+    setWorkingBubble("Running daily finance check across accounts…")
+    await update((d) => {
       d.chat.push({ id: `m-${Date.now()}`, role: "user", text: "Run today's finance check" })
     })
-    api.copilotDailyCheck()
-      .then(async ({ answer }) => {
-        await update((d) => {
-          d.chat.push({ id: `m-${Date.now()}-a`, role: "assistant", text: answer.headline, answer })
+    try {
+      const { answer, proposals } = await api.copilotDailyCheck()
+      const approvalIds = proposals?.map((p) => p.id) ?? []
+      await update((d) => {
+        d.chat.push({
+          id: `m-${Date.now()}-a`,
+          role: "assistant",
+          text: answer.headline,
+          answer: { ...answer, approvalIds },
+          approvalIds,
         })
-        await refresh().catch(() => undefined)
       })
-      .catch((cause: unknown) =>
-        update((d) => {
-          d.chat.push({ id: `m-${Date.now()}-e`, role: "assistant", text: `The daily check failed: ${cause instanceof Error ? cause.message : "the server did not respond"}.` })
-        }))
-      .finally(() => setThinking(null))
-  }
+      await refresh().catch(() => undefined)
+    } catch (cause) {
+      await update((d) => {
+        d.chat.push({
+          id: `m-${Date.now()}-e`,
+          role: "assistant",
+          text: `The daily check failed: ${cause instanceof Error ? cause.message : "the server did not respond"}.`,
+        })
+      })
+    } finally {
+      setWorkingBubble(null)
+    }
+  })
 
   useEffect(() => {
     const q = routeParams().get("q")
@@ -89,28 +113,77 @@ export default function CopilotPage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
-  }, [state.chat.length, thinking])
+  }, [state.chat.length, thinking, workingBubble])
 
   const runAction = async (action: CopilotAction) => {
     if (action.kind === "navigate") return go(action.to)
+    if (isBusy) return
     if (!can.prepare) return toast("Your role can view answers but not prepare actions.")
     const overdue = state.invoices.filter((i) => i.status === "Sent" && i.dueDate < today)
-    const results = await Promise.all(overdue.map(async (i) => ({ id: i.id, ...await prepareReminder(i.id, { preparedBy: "CentsAI agent" }) })))
-    const ok = results.filter((r) => r.ok)
-    update((d) => {
-      d.chat.push({
-        id: `m-${Date.now()}-x`,
-        role: "assistant",
-        text: ok.length ? `I prepared ${ok.length} reminder${ok.length > 1 ? "s" : ""} for approval.` : "No new reminders were needed.",
-        answer: {
-          intent: "action", headline: ok.length ? `I prepared ${ok.length} reminder draft${ok.length > 1 ? "s" : ""} — nothing has been sent.` : "No new reminders were prepared.",
-          paragraphs: [...results.map((r) => `${r.id}: ${r.message}`), "An authorised person must approve each one in Approvals & Audit before PayPal or email delivery."],
-          figures: [], records: results.map((r) => r.id), assumptions: [], missing: [],
-          trace: results.map((r) => ({ tool: "approvals.request", input: `kind=send_reminder ref=${r.id}`, output: r.ok ? "queued" : "blocked" })),
-          actions: [{ label: "Review in Approvals", kind: "navigate", to: "approvals" }],
-        },
+    if (overdue.length === 0) {
+      await update((d) => {
+        d.chat.push({
+          id: `m-${Date.now()}-x`,
+          role: "assistant",
+          text: "No overdue invoices need a reminder right now.",
+        })
       })
-    })
+      return
+    }
+    const count = overdue.length
+    setBusyAction(action.label)
+    setWorkingBubble(`Drafting reminders for ${count} overdue invoice${count === 1 ? "" : "s"}…`)
+    try {
+      const results = await Promise.all(
+        overdue.map(async (i) => {
+          const res = await prepareReminder(i.id, { preparedBy: "CentsAI agent" })
+          const existing = stateRef.current.approvals.find(
+            (a) => a.kind === "send_reminder" && a.refId === i.id && (a.status === "Pending" || a.status === "Submitted"),
+          )
+          const approvalId = res.id ?? existing?.id
+          return { ...res, invoiceId: i.id, approvalId }
+        }),
+      )
+      const ok = results.filter((r) => r.ok)
+      const approvalIds = results.map((r) => r.approvalId).filter((id): id is string => Boolean(id))
+      await update((d) => {
+        d.chat.push({
+          id: `m-${Date.now()}-x`,
+          role: "assistant",
+          text: ok.length ? `I prepared ${ok.length} reminder draft${ok.length > 1 ? "s" : ""} for approval.` : "No new reminders were needed.",
+          approvalIds,
+          answer: {
+            intent: "action",
+            headline: ok.length ? `I prepared ${ok.length} reminder draft${ok.length > 1 ? "s" : ""} — nothing has been sent.` : "No new reminders were prepared.",
+            paragraphs: [
+              ...results.map((r) => `${r.invoiceId}: ${r.message}`),
+              "An authorised person can review and approve each one below before PayPal or email delivery.",
+            ],
+            figures: [],
+            records: results.map((r) => r.invoiceId),
+            assumptions: [],
+            missing: [],
+            trace: results.map((r) => ({ tool: "approvals.request", input: `kind=send_reminder ref=${r.invoiceId}`, output: r.ok ? "queued" : "blocked" })),
+            actions: approvalIds.length === 0 ? [{ label: "Review in Approvals", kind: "navigate", to: "approvals" }] : [],
+            approvalIds,
+          },
+        })
+      })
+      if (hostedMode) {
+        await refresh().catch(() => undefined)
+      }
+    } catch (cause) {
+      await update((d) => {
+        d.chat.push({
+          id: `m-${Date.now()}-e`,
+          role: "assistant",
+          text: `Failed to prepare reminders: ${cause instanceof Error ? cause.message : "an error occurred"}.`,
+        })
+      })
+    } finally {
+      setBusyAction(null)
+      setWorkingBubble(null)
+    }
   }
 
   const context = useMemo(() => {
@@ -138,12 +211,18 @@ export default function CopilotPage() {
             </Badge>
           )}
           {hostedMode && can.prepare && (
-            <Button variant="secondary" icon={Bot} onClick={runDailyCheck} disabled={!!thinking}>
-              Run daily check
+            <Button
+              variant="secondary"
+              icon={Bot}
+              onClick={() => void dailyCheckAction.run()}
+              disabled={isBusy}
+              loading={dailyCheckAction.busy}
+            >
+              {dailyCheckAction.busy ? "Running daily check…" : "Run daily check"}
             </Button>
           )}
           {state.chat.length > 0 && (
-            <Button variant="ghost" icon={Eraser} onClick={() => update((d) => { d.chat = [] })}>
+            <Button variant="ghost" icon={Eraser} disabled={isBusy} onClick={() => update((d) => { d.chat = [] })}>
               Clear
             </Button>
           )}
@@ -153,7 +232,7 @@ export default function CopilotPage() {
         <Card className="conversation">
           <div className={`suggestions ${state.chat.length ? "suggestions-compact" : ""}`}>
             {SUGGESTED_QUESTIONS.map((q) => (
-              <Button key={q} onClick={() => ask(q)} disabled={!!thinking}>
+              <Button key={q} onClick={() => ask(q)} disabled={isBusy}>
                 {q}
               </Button>
             ))}
@@ -174,8 +253,28 @@ export default function CopilotPage() {
                   <p>{m.text}</p>
                 </div>
               ) : (
-                <AssistantMessage key={m.id} answer={m.answer} text={m.text} onAction={runAction} />
+                <AssistantMessage
+                  key={m.id}
+                  message={m}
+                  answer={m.answer}
+                  text={m.text}
+                  onAction={runAction}
+                  busyAction={busyAction}
+                  isBusy={isBusy}
+                />
               ),
+            )}
+            {workingBubble && (
+              <div className="assistant-message">
+                <div className="bot-avatar thinking">
+                  <Sparkles size={16} />
+                </div>
+                <div className="thinking-steps">
+                  <p>
+                    <span className="dot-pulse" /> {workingBubble}
+                  </p>
+                </div>
+              </div>
             )}
             {thinking && <Thinking />}
             <div ref={endRef} />
@@ -187,8 +286,14 @@ export default function CopilotPage() {
               ask(message)
             }}
           >
-            <Input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Ask about your agency’s finances…" aria-label="Message" />
-            <Button variant="primary" type="submit" icon={Send} aria-label="Send message" disabled={!message.trim() || !!thinking} />
+            <Input
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Ask about your agency’s finances…"
+              aria-label="Message"
+              disabled={isBusy}
+            />
+            <Button variant="primary" type="submit" icon={Send} aria-label="Send message" disabled={!message.trim() || isBusy} />
           </form>
           <small className="composer-note">Answers are calculated from displayed records and stated assumptions. Review before acting.</small>
         </Card>
@@ -270,8 +375,24 @@ function Thinking() {
   )
 }
 
-function AssistantMessage({ answer, text, onAction }: { answer?: CopilotAnswer; text: string; onAction: (a: CopilotAction) => void }) {
+function AssistantMessage({
+  message,
+  answer,
+  text,
+  onAction,
+  busyAction,
+  isBusy,
+}: {
+  message?: ChatMessage
+  answer?: CopilotAnswer
+  text: string
+  onAction: (a: CopilotAction) => void
+  busyAction?: string | null
+  isBusy?: boolean
+}) {
   const [showTrace, setShowTrace] = useState(false)
+  const approvalIds = message?.approvalIds ?? answer?.approvalIds ?? []
+
   if (!answer) {
     return (
       <div className="assistant-message">
@@ -281,6 +402,7 @@ function AssistantMessage({ answer, text, onAction }: { answer?: CopilotAnswer; 
         <div>
           <strong>CentsAI</strong>
           <p>{text}</p>
+          {approvalIds.length > 0 && <ApprovalGroup approvalIds={approvalIds} disabled={isBusy} />}
         </div>
       </div>
     )
@@ -336,6 +458,9 @@ function AssistantMessage({ answer, text, onAction }: { answer?: CopilotAnswer; 
             </span>
           </div>
         )}
+        {approvalIds.length > 0 && (
+          <ApprovalGroup approvalIds={approvalIds} disabled={isBusy} />
+        )}
         {answer.engine && (
           <small className="section-note">
             {answer.engine === "llm" ? `Written by ${answer.model ?? "the LLM agent"} from tool results` : "Rule-based answer"}
@@ -371,11 +496,25 @@ function AssistantMessage({ answer, text, onAction }: { answer?: CopilotAnswer; 
         )}
         {answer.actions.length > 0 && (
           <div className="message-actions">
-            {answer.actions.map((a, i) => (
-              <Button key={a.label} variant={i === 0 ? "primary" : "secondary"} onClick={() => onAction(a)}>
-                {a.label} {a.kind === "navigate" && <ArrowRight size={13} />}
-              </Button>
-            ))}
+            {answer.actions.map((a, i) => {
+              const isThisBusy = busyAction === a.label
+              const label = isThisBusy
+                ? a.kind === "draft-reminders"
+                  ? "Preparing reminders…"
+                  : `${a.label}…`
+                : a.label
+              return (
+                <Button
+                  key={a.label}
+                  variant={i === 0 ? "primary" : "secondary"}
+                  onClick={() => onAction(a)}
+                  disabled={isBusy}
+                  loading={isThisBusy}
+                >
+                  {label} {a.kind === "navigate" && <ArrowRight size={13} />}
+                </Button>
+              )
+            })}
           </div>
         )}
       </div>

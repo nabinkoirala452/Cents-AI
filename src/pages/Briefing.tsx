@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { ArrowRight, CalendarDays, Check, Download, RefreshCw, Sparkles } from "lucide-react"
 import { ChartLegend, ForecastChart } from "../components/charts"
 import { PriorityList } from "../components/finance-ui"
-import { Badge, Button, Card, CardHeader, MetricCard, Select, Title } from "../components/ui"
+import { Badge, Button, Card, CardHeader, MetricCard, Select, Title, useAction } from "../components/ui"
 import { download } from "../lib/csv"
 import { fmtDay, fmtLong } from "../lib/dates"
 import { buildBriefing, type CashEvent } from "../lib/finance"
@@ -18,6 +18,12 @@ export default function BriefingPage() {
   const { state, today, restoreInsights, toast } = useStore()
   const [horizon, setHorizon] = useState<7 | 30 | 90>(state.settings.defaultHorizon)
   const [generatedAt, setGeneratedAt] = useState(() => new Date())
+
+  const restoreAction = useAction(async () => {
+    const res = await restoreInsights()
+    if (!res.ok) return toast(res.message)
+    toast("Dismissed insights restored")
+  })
   const brief = useMemo(() => buildBriefing(state, today, horizon), [state, today, horizon, generatedAt])
   const { all, rec, cash } = brief
   const active = brief.priorities.filter((p) => !state.dismissedInsights.includes(p.id))
@@ -110,11 +116,9 @@ export default function BriefingPage() {
                 {dismissed > 0 && (
                   <Button
                     variant="ghost"
-                    onClick={async () => {
-                      const res = await restoreInsights()
-                      if (!res.ok) return toast(res.message)
-                      toast("Dismissed insights restored")
-                    }}
+                    loading={restoreAction.busy}
+                    disabled={restoreAction.busy}
+                    onClick={() => void restoreAction.run()}
                   >
                     Restore {dismissed} dismissed
                   </Button>

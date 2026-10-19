@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
-import { AlertTriangle, Check, Plus, ShieldCheck, Sparkles } from "lucide-react"
+import { AlertTriangle, ArrowRight, Check, Plus, ShieldCheck, Sparkles } from "lucide-react"
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
+import { approvalPermission } from "../components/approval-card"
 import { Badge, Button, Card, CardHeader, Field, FormModal, Input, MetricCard, Select, Title } from "../components/ui"
 import { addDays, dayInMonth, fmtDay, fmtMonth } from "../lib/dates"
 import { expenseInsights, monthlyEquivalent, monthToDate, periodTotals } from "../lib/finance"
@@ -13,9 +14,11 @@ const TREND_CATEGORIES = ["Payroll", "Contractors", "Software", "Operations", "T
 const TREND_COLORS = ["#176b52", "#56ad8d", "#a86513", "#89918c", "#b84646", "#4b6b80"]
 
 export default function ExpensesPage() {
-  const { state, today, markRecurringReviewed, log, actor, toast, can, requestCancelSubscription } = useStore()
+  const { state, today, markRecurringReviewed, log, actor, toast, can, requestCancelSubscription, approve, mode, signedInName } = useStore()
   const [adding, setAdding] = useState(false)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const [reviewingId, setReviewingId] = useState<string | null>(null)
+  const [approvingId, setApprovingId] = useState<string | null>(null)
   const month = monthToDate(state, today)
   const x = useMemo(() => expenseInsights(state, today), [state, today])
   const categories = Object.entries(month.current.byCategory).sort((a, b) => b[1] - a[1])
@@ -41,10 +44,16 @@ export default function ExpensesPage() {
   )
 
   const markReviewed = async (r: RecurringCost) => {
-    const res = await markRecurringReviewed(r.id)
-    if (!res.ok) return toast(res.message)
-    log({ actor, action: "Subscription reviewed", detail: `${r.vendor} kept at ${money(r.amount)}/${r.cycle === "Annual" ? "year" : "month"}`, ref: r.id, outcome: "info" })
-    toast(`${r.vendor} marked as reviewed`)
+    if (reviewingId) return
+    setReviewingId(r.id)
+    try {
+      const res = await markRecurringReviewed(r.id)
+      if (!res.ok) return toast(res.message)
+      log({ actor, action: "Subscription reviewed", detail: `${r.vendor} kept at ${money(r.amount)}/${r.cycle === "Annual" ? "year" : "month"}`, ref: r.id, outcome: "info" })
+      toast(`${r.vendor} marked as reviewed`)
+    } finally {
+      setReviewingId(null)
+    }
   }
 
   const savings = x.flags.filter((f) => f.kind !== "duplicate").reduce((s, f) => s + f.amount, 0)
@@ -109,7 +118,12 @@ export default function ExpensesPage() {
                   ) : (
                     r && (
                       <div className="row-actions">
-                        <Button variant="ghost" disabled={!can.edit} onClick={() => markReviewed(r)}>
+                        <Button
+                          variant="ghost"
+                          disabled={!can.edit || reviewingId === r.id}
+                          loading={reviewingId === r.id}
+                          onClick={() => markReviewed(r)}
+                        >
                           Keep
                         </Button>
                         <Button
@@ -203,24 +217,60 @@ export default function ExpensesPage() {
                       <Badge tone={r.status === "Cancelled" ? "neutral" : r.status === "Review" && !r.reviewed ? "amber" : "green"}>{pending ? "Cancel pending" : r.status === "Review" && r.reviewed ? "Active" : r.status}</Badge>
                     </td>
                     <td>
-                      {r.status !== "Cancelled" && r.kind === "Subscription" && !pending && (
-                        <Button
-                          variant="ghost"
-                          disabled={!can.prepare || cancellingId === r.id}
-                          loading={cancellingId === r.id}
-                          onClick={async () => {
-                            if (cancellingId) return
-                            setCancellingId(r.id)
-                            try {
-                              const res = await requestCancelSubscription(r.id, state.settings.role === "Owner")
-                              toast(res.message)
-                            } finally {
-                              setCancellingId(null)
-                            }
-                          }}
-                        >
-                          Cancel…
-                        </Button>
+                      {r.status !== "Cancelled" && r.kind === "Subscription" && (
+                        pending ? (
+                          (() => {
+                            const canApprove = approvalPermission(pending, { settings: state.settings, mode, actor, signedInName }).allowed
+                            return canApprove ? (
+                              <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", alignItems: "flex-start" }}>
+                                <Button
+                                  variant="primary"
+                                  disabled={approvingId === pending.id}
+                                  loading={approvingId === pending.id}
+                                  onClick={async () => {
+                                    if (approvingId) return
+                                    setApprovingId(pending.id)
+                                    try {
+                                      const res = await approve(pending.id)
+                                      toast(res.message)
+                                    } finally {
+                                      setApprovingId(null)
+                                    }
+                                  }}
+                                >
+                                  {approvingId === pending.id ? "Approving…" : "Approve cancel"}
+                                </Button>
+                                {pending.steps?.length > 0 && (
+                                  <small className="muted text-[10px] block leading-tight">
+                                    {pending.steps.join(" · ")}
+                                  </small>
+                                )}
+                              </div>
+                            ) : (
+                              <Button variant="ghost" onClick={() => go("approvals")}>
+                                Awaiting approval <ArrowRight size={13} />
+                              </Button>
+                            )
+                          })()
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            disabled={!can.prepare || cancellingId === r.id}
+                            loading={cancellingId === r.id}
+                            onClick={async () => {
+                              if (cancellingId) return
+                              setCancellingId(r.id)
+                              try {
+                                const res = await requestCancelSubscription(r.id, state.settings.role === "Owner")
+                                toast(res.message)
+                              } finally {
+                                setCancellingId(null)
+                              }
+                            }}
+                          >
+                            Cancel…
+                          </Button>
+                        )
                       )}
                     </td>
                   </tr>

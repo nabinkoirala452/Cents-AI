@@ -341,6 +341,7 @@ function Integrations() {
           <Button
             icon={RefreshCw}
             disabled={checking}
+            loading={checking}
             onClick={async () => {
               setChecking(true)
               const open = paypalInvoices.filter((i) => i.status === "Sent")
@@ -426,6 +427,17 @@ function DataManagement() {
     ["Audit log", "Approvals, API results and edits", () => { void exportAudit() }],
     ["Full workspace", "Everything as JSON (backend seed)", () => download("centsai-workspace.json", JSON.stringify(state, null, 2), "application/json")],
   ]
+
+  const resetAction = useAction(async () => {
+    try {
+      await reset()
+      setConfirm(false)
+      toast(mode === "hosted" ? "Workspace reset" : "Demonstration data reset")
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "Reset failed.")
+    }
+  })
+
   return (
     <>
       <Heading title="Data Management" copy="Export your records or reset the demonstration workspace." />
@@ -478,18 +490,11 @@ function DataManagement() {
             <Button onClick={() => setConfirm(false)}>Cancel</Button>
             <Button
               variant="danger"
-              disabled={mode === "hosted" && resetCode !== "RESET"}
-              onClick={async () => {
-                try {
-                  await reset()
-                  setConfirm(false)
-                  toast(mode === "hosted" ? "Workspace reset" : "Demonstration data reset")
-                } catch (cause) {
-                  toast(cause instanceof Error ? cause.message : "Reset failed.")
-                }
-              }}
+              disabled={(mode === "hosted" && resetCode !== "RESET") || resetAction.busy}
+              loading={resetAction.busy}
+              onClick={() => void resetAction.run()}
             >
-              Reset data
+              {resetAction.busy ? "Resetting data…" : "Reset data"}
             </Button>
           </div>
         </Modal>

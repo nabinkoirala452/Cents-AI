@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { AlertTriangle, ArrowRight, Check, Clock3, Download, ShieldCheck, Sparkles } from "lucide-react"
-import { Badge, Button, Card, CardHeader, Drawer, Field, Input, MetricCard, Note, Select, Title } from "../components/ui"
+import { Badge, Button, Card, CardHeader, Drawer, Field, Input, MetricCard, Note, Select, Title, useAction } from "../components/ui"
 import { download, toCsv } from "../lib/csv"
 import { HOURS_PER_MONTH, projectStats } from "../lib/finance"
 import { money, pct } from "../lib/format"
@@ -142,7 +142,7 @@ function ProjectDrawer({ id, close }: { id: string; close: () => void }) {
   const [hours, setHours] = useState(p.project.unassignedHours || 8)
   const fromUnassigned = Math.min(hours, p.project.unassignedHours)
 
-  const assign = async () => {
+  const assignAction = useAction(async () => {
     if (!can.edit) return toast("Viewers can't change project data.")
     if (!(hours > 0)) return toast("Enter a positive number of hours")
     const employee = state.employees.find((e) => e.id === employeeId)!
@@ -150,7 +150,7 @@ function ProjectDrawer({ id, close }: { id: string; close: () => void }) {
     if (!res.ok) return toast(res.message)
     log({ actor, action: "Hours attributed", detail: `${hours}h on ${p.project.name} → ${employee.name} (${money((employee.monthlySalary / HOURS_PER_MONTH) * hours)})`, ref: id, outcome: "info" })
     toast(`${hours}h assigned — margin recalculated`)
-  }
+  })
 
   const story =
     p.billed === 0
@@ -241,8 +241,13 @@ function ProjectDrawer({ id, close }: { id: string; close: () => void }) {
           </Field>
         </div>
         {p.project.unassignedHours > 0 && fromUnassigned > 0 && <small className="section-note">{fromUnassigned}h will come from the unassigned pool.</small>}
-        <Button variant="primary" disabled={!can.edit} onClick={assign}>
-          {p.project.unassignedHours ? "Assign hours" : "Log hours"}
+        <Button
+          variant="primary"
+          disabled={!can.edit || assignAction.busy}
+          loading={assignAction.busy}
+          onClick={() => void assignAction.run()}
+        >
+          {assignAction.busy ? "Assigning hours…" : p.project.unassignedHours ? "Assign hours" : "Log hours"}
         </Button>
       </div>
       {p.flags.includes("Over budget") && (

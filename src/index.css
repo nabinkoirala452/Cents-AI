@@ -319,6 +319,18 @@ button.project-row { width: 100%; border: 0; border-top: 1px solid var(--border)
 .review-modal { width: min(520px, calc(100% - 28px)); max-height: calc(100vh - 32px); overflow-y: auto; }.review-modal label { display: flex; flex-direction: column; gap: 6px; text-align: left; color: var(--muted); font-size: 10px; font-weight: 600; margin-bottom: 14px; }.review-modal label .input { width: 100%; }
 .approval-data span { align-items: center; gap: 12px; }.approval-data span > strong, .approval-data span > code { text-align: right; }
 .steps-list, .draft-preview { text-align: left; margin-bottom: 14px; }.steps-list ol { margin: 6px 0 0; padding-left: 18px; font-size: 11px; line-height: 1.7; color: var(--text); }.draft-preview .textarea { margin-top: 6px; font-size: 11px; background: var(--bg); }
+.approval-review-card { background: var(--card); border: 1px solid var(--border); border-radius: 11px; padding: 14px 16px; margin: 12px 0; box-shadow: var(--shadow); text-align: left; }
+.approval-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.approval-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; font-size: 11px; font-weight: 500; margin: 8px 0; }
+.approval-banner-verified { background: var(--green-soft); color: var(--green); }
+.approval-banner-submitted { background: var(--blue-soft); color: #1c5b73; }
+.approval-banner-rejected { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+.approval-banner-failed { background: var(--red-soft); color: var(--red); }
+.approval-card-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.approval-inline-buttons { display: flex; align-items: center; gap: 8px; }
+.approve-all-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; background: var(--amber-soft); border: 1px solid color-mix(in srgb, var(--amber) 25%, var(--border)); border-radius: 9px; margin: 10px 0 8px; }
+.open-approvals-link { font-size: 11px !important; color: var(--muted); padding: 4px 8px; }
+.open-approvals-link:hover { color: var(--text); }
 
 /* Financing */
 .alternative-list > button { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 11px 0; border: 0; border-top: 1px solid var(--border); background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }.alternative-list > button:first-child { border: 0; }.alternative-list > button:hover strong { color: var(--green); }

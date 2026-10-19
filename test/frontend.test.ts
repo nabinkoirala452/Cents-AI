@@ -159,6 +159,146 @@ describe("Frontend API client & hosted store mutations", () => {
 
     expect(successResult.ok).toBe(true)
     expect(successResult.message).toBe("Created 123")
+    expect(successResult.id).toBe("123")
     expect(refreshed).toBe(true)
   })
 })
+
+import { approvalPermission } from "../src/components/approval-card"
+import type { Approval, Settings } from "../src/lib/types"
+
+describe("approvalPermission pure maker-checker rules", () => {
+  const baseSettings: Settings = {
+    agencyName: "Acme",
+    agencyType: "Design",
+    teamSize: "5",
+    location: "US",
+    website: "https://example.com",
+    ownerName: "Alex Rivera",
+    ownerEmail: "owner@centsai.demo",
+    currency: "USD",
+    safetyThreshold: 10000,
+    defaultHorizon: 30,
+    planningScenario: "expected",
+    managerApprovalLimit: 2500,
+    role: "Owner",
+    openingBalance: 50000,
+    openingDate: "2026-01-01",
+    notifications: {},
+    team: [
+      { name: "Alex Rivera", email: "owner@centsai.demo", role: "Owner" },
+      { name: "Morgan Chen", email: "finance@centsai.demo", role: "Finance Manager" },
+      { name: "Sam Viewer", email: "viewer@centsai.demo", role: "Viewer" },
+    ],
+    readiness: [],
+  }
+
+  function makeApproval(overrides: Partial<Approval> = {}): Approval {
+    return {
+      id: "AP-101",
+      kind: "send_reminder",
+      title: "Reminder for INV-1001",
+      recipient: "client@example.com",
+      amount: 1500,
+      currency: "USD",
+      refId: "INV-1001",
+      preparedBy: "Alex Rivera",
+      requestedAt: "2026-10-19T10:00:00Z",
+      status: "Pending",
+      idempotencyKey: "key-101",
+      steps: ["Verify reminder", "Send email"],
+      ...overrides,
+    }
+  }
+
+  it("Owner approves agent item", () => {
+    const settings: Settings = { ...baseSettings, role: "Owner" }
+    const a = makeApproval({
+      preparedBy: "CentsAI agent (for Alex Rivera)",
+      preparedByAgent: true,
+      amount: 15000,
+    })
+    const perm = approvalPermission(a, {
+      settings,
+      mode: "hosted",
+      actor: "Alex Rivera",
+      signedInName: "Alex Rivera",
+    })
+    expect(perm.allowed).toBe(true)
+    expect(perm.permissionAllowed).toBe(true)
+    expect(perm.isSelfPrepared).toBe(false)
+  })
+
+  it("FM blocked on own item", () => {
+    const settings: Settings = { ...baseSettings, role: "Finance Manager", managerApprovalLimit: 2500 }
+    const a = makeApproval({
+      preparedBy: "Morgan Chen",
+      amount: 500,
+    })
+    const perm = approvalPermission(a, {
+      settings,
+      mode: "demo",
+      actor: "Morgan Chen",
+      signedInName: "Morgan Chen",
+    })
+    expect(perm.allowed).toBe(false)
+    expect(perm.permissionAllowed).toBe(true)
+    expect(perm.isSelfPrepared).toBe(true)
+    expect(perm.blockedReason).toContain("Finance Managers cannot approve requests they prepared themselves")
+  })
+
+  it("FM blocked on 'CentsAI agent (for <FM name>)' in hosted mode", () => {
+    const settings: Settings = { ...baseSettings, role: "Finance Manager", managerApprovalLimit: 2500 }
+    const a = makeApproval({
+      preparedBy: "CentsAI agent (for Morgan Chen)",
+      preparedByAgent: true,
+      amount: 500,
+    })
+    const perm = approvalPermission(a, {
+      settings,
+      mode: "hosted",
+      actor: "Morgan Chen",
+      signedInName: "Morgan Chen",
+    })
+    expect(perm.allowed).toBe(false)
+    expect(perm.permissionAllowed).toBe(true)
+    expect(perm.isSelfPrepared).toBe(true)
+    expect(perm.blockedReason).toContain("Finance Managers cannot approve requests they prepared themselves")
+  })
+
+  it("FM blocked above the limit", () => {
+    const settings: Settings = { ...baseSettings, role: "Finance Manager", managerApprovalLimit: 1000 }
+    const a = makeApproval({
+      preparedBy: "Someone Else",
+      amount: 3000,
+    })
+    const perm = approvalPermission(a, {
+      settings,
+      mode: "hosted",
+      actor: "Morgan Chen",
+      signedInName: "Morgan Chen",
+    })
+    expect(perm.allowed).toBe(false)
+    expect(perm.permissionAllowed).toBe(false)
+    expect(perm.isSelfPrepared).toBe(false)
+    expect(perm.blockedReason).toBe("Owner approval required.")
+  })
+
+  it("Viewer blocked", () => {
+    const settings: Settings = { ...baseSettings, role: "Viewer" }
+    const a = makeApproval({
+      preparedBy: "Someone Else",
+      amount: 100,
+    })
+    const perm = approvalPermission(a, {
+      settings,
+      mode: "hosted",
+      actor: "Sam Viewer",
+      signedInName: "Sam Viewer",
+    })
+    expect(perm.allowed).toBe(false)
+    expect(perm.permissionAllowed).toBe(false)
+    expect(perm.blockedReason).toBe("Viewers can’t approve actions.")
+  })
+})
+

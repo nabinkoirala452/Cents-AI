@@ -215,6 +215,7 @@ export type ChatMessage = {
   role: "user" | "assistant"
   text: string
   answer?: import("./copilot").CopilotAnswer
+  approvalIds?: string[]
 }
 
 export type State = {

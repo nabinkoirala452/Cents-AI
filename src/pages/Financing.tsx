@@ -27,6 +27,7 @@ export default function FinancingPage() {
   const [scenario, setScenario] = useState<Scenario>("conservative")
   const [selectedOffer, setSelectedOffer] = useState(state.offers[0]?.id ?? "")
   const [adding, setAdding] = useState(false)
+  const [removingOfferId, setRemovingOfferId] = useState<string | null>(null)
 
   const rec = receivables(state, today)
   const cash = cashBalance(state, today)
@@ -216,11 +217,18 @@ export default function FinancingPage() {
                       variant="ghost"
                       icon={Trash2}
                       aria-label={`Remove ${r.o.name}`}
-                      disabled={!can.edit}
+                      disabled={!can.edit || removingOfferId === r.o.id}
+                      loading={removingOfferId === r.o.id}
                       onClick={async (e) => {
                         e.stopPropagation()
-                        const result = await removeOffer(r.o.id)
-                        if (!result.ok) toast(result.message)
+                        if (removingOfferId) return
+                        setRemovingOfferId(r.o.id)
+                        try {
+                          const result = await removeOffer(r.o.id)
+                          if (!result.ok) toast(result.message)
+                        } finally {
+                          setRemovingOfferId(null)
+                        }
                       }}
                     />
                   </td>

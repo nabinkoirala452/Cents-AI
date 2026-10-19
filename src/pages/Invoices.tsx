@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react"
 import { AlertTriangle, Check, Clock3, Copy, ExternalLink, Mail, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Trash2 } from "lucide-react"
+import { ApprovalDraft, ApprovalSteps, approvalPermission } from "../components/approval-card"
 import { InvoiceRows } from "../components/finance-ui"
 import { Badge, Button, Card, Drawer, Field, FormModal, Input, MetricCard, Modal, Note, Select, Tabs, Textarea, Title, useAction } from "../components/ui"
 import { addDays, fmtDate, fmtDay, fmtStamp, relativeDue } from "../lib/dates"
@@ -107,6 +108,16 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
   const isFinanceManager = role === "Finance Manager"
   const isViewer = role === "Viewer"
 
+  const canApprovePending = Boolean(
+    pending &&
+      approvalPermission(pending, {
+        settings: state.settings,
+        mode,
+        actor: store.actor,
+        signedInName: store.signedInName,
+      }).allowed,
+  )
+
   const lastReminder = inv.reminders.length > 0 ? inv.reminders[inv.reminders.length - 1] : null
   const isWithin24h = Boolean(lastReminder && lastReminder.date >= today)
 
@@ -161,6 +172,12 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
     setConfirmSend(false)
   })
 
+  const approvePendingAction = useAction(async () => {
+    if (!pending) return
+    const res = await store.approve(pending.id)
+    toast(res.message)
+  })
+
   const handleReminderClick = () => {
     if (isWithin24h) {
       if (!isOwner) {
@@ -197,6 +214,12 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
       onClose={close}
       footer={
         <>
+          {pending?.status === "Pending" && (
+            <div className="w-full mb-3 text-left space-y-2 border-b border-[var(--border)] pb-3">
+              <ApprovalSteps steps={pending.steps} />
+              {pending.draft && <ApprovalDraft draft={pending.draft} rows={4} />}
+            </div>
+          )}
           {inv.status === "Draft" && (
             <>
               <Button
@@ -214,9 +237,20 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
                     Sending to PayPal…
                   </Button>
                 ) : pending?.status === "Pending" ? (
-                  <a href="#app/approvals" className="button button-secondary">
-                    Awaiting approval {pending.id}
-                  </a>
+                  canApprovePending ? (
+                    <Button
+                      variant="primary"
+                      disabled={approvePendingAction.busy}
+                      loading={approvePendingAction.busy}
+                      onClick={() => approvePendingAction.run()}
+                    >
+                      Approve & send
+                    </Button>
+                  ) : (
+                    <a href="#app/approvals" className="button button-secondary">
+                      Awaiting approval
+                    </a>
+                  )
                 ) : isOwner ? (
                   <Button
                     variant="primary"
@@ -256,14 +290,26 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
           )}
           {inv.status === "Sent" && (
             <>
-              <Button
-                icon={Mail}
-                title={inv.paypal ? "PayPal emails the client directly" : "Prepare reminder draft"}
-                disabled={isViewer || !!pending}
-                onClick={handleReminderClick}
-              >
-                {reminderButtonText}
-              </Button>
+              {pending?.kind === "send_reminder" && pending.status === "Pending" && canApprovePending ? (
+                <Button
+                  variant="primary"
+                  icon={Mail}
+                  disabled={approvePendingAction.busy}
+                  loading={approvePendingAction.busy}
+                  onClick={() => approvePendingAction.run()}
+                >
+                  Approve reminder
+                </Button>
+              ) : (
+                <Button
+                  icon={Mail}
+                  title={inv.paypal ? "PayPal emails the client directly" : "Prepare reminder draft"}
+                  disabled={isViewer || !!pending}
+                  onClick={handleReminderClick}
+                >
+                  {reminderButtonText}
+                </Button>
+              )}
               {inv.paypal ? (
                 <Button
                   variant="primary"
@@ -464,7 +510,7 @@ function InvoiceDrawer({ inv, close }: { inv: Invoice; close: () => void }) {
 
       {pending && (
         <Note icon={ShieldCheck}>
-          {pending.id} · {pending.title} is {pending.status === "Pending" ? "waiting for approval" : "submitted"}.
+          {pending.title} is {pending.status === "Pending" ? "waiting for approval" : "submitted"}.
         </Note>
       )}
 

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import { AlertTriangle, ArrowRight, Calculator, Pencil, Plus, ShieldCheck, Trash2, UserPlus } from "lucide-react"
+import { approvalPermission } from "../components/approval-card"
 import { Badge, Button, Card, CardHeader, Field, FormModal, Input, MetricCard, Segmented, Select, Tabs, Title } from "../components/ui"
 import { addDays, dayInMonth, fmtDay, fmtMonth, monthKey } from "../lib/dates"
 import { buildEvents, cashBalance, forecast, monthlyPayroll, projectOf, type CashEvent } from "../lib/finance"
@@ -9,7 +10,7 @@ import { useStore } from "../lib/store"
 import type { ContractorBill, Employee } from "../lib/types"
 
 export default function PayrollPage() {
-  const { state, today, removeEmployee: deleteEmployeeFromStore, log, actor, toast, can, requestContractorPayment } = useStore()
+  const { state, today, removeEmployee: deleteEmployeeFromStore, log, actor, toast, can, requestContractorPayment, approve, mode, signedInName } = useStore()
   const [tab, setTab] = useState<"Employees" | "Contractors">("Employees")
   const [window_, setWindow] = useState<7 | 14 | 30>(14)
   const [editing, setEditing] = useState<Employee | "new" | null>(null)
@@ -148,9 +149,46 @@ export default function PayrollPage() {
                         <td>
                           {b.status !== "Paid" &&
                             (approval ? (
-                              <Button variant="ghost" onClick={() => go("approvals")}>
-                                {approval.id} <ArrowRight size={13} />
-                              </Button>
+                              (() => {
+                                const canApprove =
+                                  approval.status === "Pending" &&
+                                  approvalPermission(approval, { settings: state.settings, mode, actor, signedInName }).allowed
+                                return canApprove ? (
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", alignItems: "flex-start" }}>
+                                    <div style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}>
+                                      <Button
+                                        variant="primary"
+                                        disabled={payingBillId === b.id}
+                                        loading={payingBillId === b.id}
+                                        onClick={async () => {
+                                          if (payingBillId) return
+                                          setPayingBillId(b.id)
+                                          try {
+                                            const res = await approve(approval.id)
+                                            toast(res.message)
+                                          } finally {
+                                            setPayingBillId(null)
+                                          }
+                                        }}
+                                      >
+                                        Approve {money(approval.amount, approval.currency)}
+                                      </Button>
+                                      <Button variant="ghost" onClick={() => go("approvals")}>
+                                        <ArrowRight size={13} />
+                                      </Button>
+                                    </div>
+                                    {approval.steps?.length > 0 && (
+                                      <small className="muted text-[10px] block leading-tight">
+                                        {approval.steps.join(" · ")}
+                                      </small>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <Button variant="ghost" onClick={() => go("approvals")}>
+                                    Awaiting approval <ArrowRight size={13} />
+                                  </Button>
+                                )
+                              })()
                             ) : (
                               <Button
                                 variant="ghost"

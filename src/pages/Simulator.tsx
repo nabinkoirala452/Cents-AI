@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { ArrowRight, Bookmark, BriefcaseBusiness, Clock3, CreditCard, Laptop, Sparkles, Trash2, TrendingDown, Users, Zap, type LucideIcon } from "lucide-react"
 import { ChartLegend, ForecastChart } from "../components/charts"
-import { Badge, Button, Card, Field, Input, Select, Title } from "../components/ui"
+import { Badge, Button, Card, Field, Input, Select, Title, useAction } from "../components/ui"
 import { addDays, dayInMonth, diffDays, fmtDate, fmtDay, fmtStamp } from "../lib/dates"
 import { cashBalance, clientOf, forecast, monthlyPayroll, nextPayroll, receivables, type CashEvent, type ForecastMods } from "../lib/finance"
 import { money } from "../lib/format"
@@ -110,7 +110,9 @@ export default function SimulatorPage() {
     return lostProject ? `losing the ${lostProject.name} retainer (${money(lostProject.retainer?.amount ?? 0)}/month)` : "losing a retainer"
   }
 
-  const saveScenario = async () => {
+  const [deletingScenarioId, setDeletingScenarioId] = useState<string | null>(null)
+
+  const saveScenarioAction = useAction(async () => {
     if (!can.edit) return toast("Viewers can't save scenarios.")
     const res = await saveScenarioToStore({
       name: `${TYPES.find((t) => t.id === type)!.label} · ${describe()}`,
@@ -120,7 +122,7 @@ export default function SimulatorPage() {
     })
     if (!res.ok) return toast(res.message)
     toast("Scenario saved")
-  }
+  })
 
   return (
     <div className="page">
@@ -215,8 +217,13 @@ export default function SimulatorPage() {
             </label>
           </div>
           <div className="form-actions">
-            <Button icon={Bookmark} onClick={saveScenario}>
-              Save scenario
+            <Button
+              icon={Bookmark}
+              loading={saveScenarioAction.busy}
+              disabled={saveScenarioAction.busy}
+              onClick={() => void saveScenarioAction.run()}
+            >
+              {saveScenarioAction.busy ? "Saving scenario…" : "Save scenario"}
             </Button>
             <Button variant="primary" icon={Zap} onClick={() => go(`copilot?q=${encodeURIComponent(type === "hire" ? `Can we afford to hire at $${x.amount} per month?` : type === "late" && lateInv ? `Can we cover payroll if ${clientOf(state, lateInv.clientId).name.split(" ")[0]} pays ${x.days} days late?` : "What does our cash forecast look like?")}`)}>
               Ask CentsAI
@@ -243,10 +250,18 @@ export default function SimulatorPage() {
                     variant="ghost"
                     icon={Trash2}
                     aria-label="Delete scenario"
+                    loading={deletingScenarioId === sc.id}
+                    disabled={deletingScenarioId === sc.id}
                     onClick={async () => {
-                      const res = await deleteScenario(sc.id)
-                      if (!res.ok) return toast(res.message)
-                      toast("Scenario deleted")
+                      if (deletingScenarioId) return
+                      setDeletingScenarioId(sc.id)
+                      try {
+                        const res = await deleteScenario(sc.id)
+                        if (!res.ok) return toast(res.message)
+                        toast("Scenario deleted")
+                      } finally {
+                        setDeletingScenarioId(null)
+                      }
                     }}
                   />
                 </div>

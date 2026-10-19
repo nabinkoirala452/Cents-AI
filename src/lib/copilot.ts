@@ -53,6 +53,8 @@ export type CopilotAnswer = {
   model?: string
   /** Server check that every amount and percentage in the wording appears in tool output. */
   grounding?: { checked: boolean; unverified: string[] }
+  /** Proposal IDs created or linked to this answer. */
+  approvalIds?: string[]
 }
 
 export const SUGGESTED_QUESTIONS = [

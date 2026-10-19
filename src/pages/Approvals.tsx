@@ -1,21 +1,13 @@
 import { useState } from "react"
-import { AlertTriangle, Bot, Check, Download, FileCheck2, Mail, ReceiptText, Send, ShieldCheck, Wallet, X, type LucideIcon } from "lucide-react"
-import { Badge, Button, Card, CardHeader, Field, Input, Modal, Note, Select, Tabs, Textarea, Title, useAction } from "../components/ui"
+import { Bot, Download, ShieldCheck } from "lucide-react"
+import { ApprovalActions, ApprovalData, ApprovalDraft, ApprovalSteps, KIND_ICON, STATUS_TONE } from "../components/approval-card"
+import { Badge, Button, Card, CardHeader, Modal, Select, Tabs, Title, useAction } from "../components/ui"
 import { download } from "../lib/csv"
 import { fmtStamp } from "../lib/dates"
 import { money } from "../lib/format"
 import { PAYPAL_MODE } from "../lib/paypal"
-import { ROLE_TIERS, permissions, useStore } from "../lib/store"
-import type { Approval, ApprovalKind, Role } from "../lib/types"
-
-const KIND_ICON: Record<ApprovalKind, LucideIcon> = {
-  paypal_send_invoice: Send,
-  send_reminder: Mail,
-  record_contractor_payment: Wallet,
-  cancel_subscription: ReceiptText,
-}
-
-const STATUS_TONE: Record<Approval["status"], string> = { Pending: "amber", Submitted: "blue", Verified: "green", Rejected: "neutral", Failed: "red", Stale: "neutral" }
+import { ROLE_TIERS, useStore } from "../lib/store"
+import type { Approval, Role } from "../lib/types"
 
 const TABS = ["Pending", "In progress", "Completed"] as const
 type Tab = (typeof TABS)[number]
@@ -32,14 +24,14 @@ export default function ApprovalsPage() {
   const audit = state.audit.filter((e) => filter === "all" || e.outcome === filter)
   const review = state.approvals.find((a) => a.id === reviewId)
 
-  const exportAudit = async () => {
+  const exportAuditAction = useAction(async () => {
     try {
       const csv = await exportAuditCsv()
       download(`centsai-audit-log-${new Date().toISOString().slice(0, 10)}.csv`, csv)
     } catch (cause) {
       toast(cause instanceof Error ? cause.message : "Audit export failed.")
     }
-  }
+  })
 
   const switchRole = (role: Role) => {
     update((d) => {
@@ -58,7 +50,7 @@ export default function ApprovalsPage() {
         </div>
         <div className="intro-actions">
           <Badge tone={counts.Pending ? "amber" : "green"}>{counts.Pending} awaiting approval</Badge>
-          <Button icon={Download} onClick={exportAudit}>
+          <Button icon={Download} loading={exportAuditAction.busy} disabled={exportAuditAction.busy} onClick={() => exportAuditAction.run()}>
             Export audit log
           </Button>
         </div>
@@ -150,128 +142,24 @@ export default function ApprovalsPage() {
 }
 
 function ReviewModal({ approval: a, close }: { approval: Approval; close: () => void }) {
-  const store = useStore()
-  const { state, mode, paypalEnvironment, approve, reject, confirmContractorPayment, toast, actor, signedInName } = store
-  const s = state.settings
-  const permissionAllowed = permissions(s).approve(a.amount)
-  const isSelfPrepared = s.role !== "Owner" && (a.preparedBy === actor || (mode === "hosted" && (a.preparedBy === signedInName || (a.preparedByAgent === true && a.preparedBy === `CentsAI agent (for ${signedInName})`))))
-  const allowed = permissionAllowed && !isSelfPrepared
-  const [reason, setReason] = useState("")
-  const [reference, setReference] = useState("")
-
-  const blockedReason = isSelfPrepared
-    ? "Finance Managers cannot approve requests they prepared themselves (maker-checker rule). Owner approval required."
-    : s.role === "Viewer"
-    ? "Viewers can’t approve actions."
-    : "Owner approval required."
-
-  const rejectAction = useAction(async () => {
-    const res = await reject(a.id, reason)
-    toast(res.message)
-    if (res.ok) close()
-  })
-
-  const approveAction = useAction(async () => {
-    const res = await approve(a.id)
-    toast(res.message)
-    if (res.ok) close()
-  })
-
-  const confirmTransferAction = useAction(async () => {
-    const res = await confirmContractorPayment(a.id, reference)
-    toast(res.message)
-    if (res.ok) close()
-  })
+  const { state, mode, paypalEnvironment } = useStore()
+  const live = state.approvals.find((x) => x.id === a.id) ?? a
 
   return (
     <Modal onClose={close} className="review-modal">
       <div className="modal-icon">
         <ShieldCheck size={22} />
       </div>
-      <Title level={2}>{a.status === "Pending" ? "Approve this action?" : a.title}</Title>
-      <p>{a.status === "Pending" ? "Check the recipient and amount. Submission does not mean money has moved — CentsAI verifies the result before updating records." : `Status: ${a.status}${a.result ? ` · ${a.result}` : ""}`}</p>
-      <div className="approval-data">
-        <span>Action <strong>{a.title}</strong></span>
-        <span>Recipient <strong>{a.recipient}</strong></span>
-        <span>Amount <strong>{money(a.amount, a.currency)} {a.currency}</strong></span>
-        <span>Fees <strong>{a.kind === "paypal_send_invoice" ? "Charged by PayPal on receipt; shown after verification" : "None recorded"}</strong></span>
-        <span>Environment <Badge tone="amber">{a.kind === "paypal_send_invoice" || a.kind === "send_reminder" ? (mode === "hosted" ? `PayPal ${paypalEnvironment}` : "PayPal Sandbox") : "Manual · bank"}</Badge></span>
-        <span>Prepared by <strong>{a.preparedBy}</strong></span>
-        <span>Requested <strong>{fmtStamp(a.requestedAt)}</strong></span>
-        <span>Idempotency key <code>{a.idempotencyKey}</code></span>
-        {a.decidedBy && <span>Decision <strong>{a.status === "Rejected" ? "Rejected" : "Approved"} by {a.decidedBy} · {fmtStamp(a.decidedAt!)}</strong></span>}
-        {a.note && <span>Reason <strong>{a.note}</strong></span>}
-      </div>
-      <div className="steps-list">
-        <span className="eyebrow">WHAT HAPPENS ON APPROVAL</span>
-        <ol>
-          {a.steps.map((step) => (
-            <li key={step}>{step}</li>
-          ))}
-        </ol>
-      </div>
-      {a.draft && (
-        <div className="draft-preview">
-          <span className="eyebrow">MESSAGE</span>
-          <Textarea readOnly rows={7} value={a.draft} />
-        </div>
-      )}
-      {a.status === "Pending" && (!permissionAllowed || isSelfPrepared) && (
-        <Note icon={AlertTriangle} tone="amber">
-          {mode === "hosted" ? `${blockedReason} The server will enforce this limit when you submit.` : blockedReason}
-        </Note>
-      )}
-      {a.status === "Pending" && (
-        <>
-          <Field label="Rejection reason (optional)">
-            <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Client already confirmed payment" />
-          </Field>
-          <div className="modal-actions">
-            <Button
-              icon={X}
-              disabled={s.role === "Viewer" || rejectAction.busy || approveAction.busy}
-              loading={rejectAction.busy}
-              onClick={() => rejectAction.run()}
-            >
-              Reject
-            </Button>
-            <Button
-              variant="primary"
-              icon={Check}
-              disabled={!allowed || approveAction.busy || rejectAction.busy}
-              loading={approveAction.busy}
-              onClick={() => approveAction.run()}
-            >
-              {approveAction.busy ? "Submitting & verifying…" : "Approve & submit"}
-            </Button>
-          </div>
-        </>
-      )}
-      {a.status === "Submitted" && a.kind === "record_contractor_payment" && (
-        <>
-          <Field label="Bank transfer reference" hint="Required — paste the reference from your bank to enable Confirm transfer.">
-
-            <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. ACH-20261017-98765" />
-          </Field>
-          <div className="modal-actions">
-            <Button disabled={confirmTransferAction.busy} onClick={close}>Later</Button>
-            <Button
-              variant="primary"
-              icon={FileCheck2}
-              disabled={confirmTransferAction.busy || !reference.trim()}
-              loading={confirmTransferAction.busy}
-              onClick={() => confirmTransferAction.run()}
-            >
-              Confirm transfer
-            </Button>
-          </div>
-        </>
-      )}
-      {a.status !== "Pending" && !(a.status === "Submitted" && a.kind === "record_contractor_payment") && (
-        <div className="modal-actions">
-          <Button onClick={close}>Close</Button>
-        </div>
-      )}
+      <Title level={2}>{live.status === "Pending" ? "Approve this action?" : live.title}</Title>
+      <p>
+        {live.status === "Pending"
+          ? "Check the recipient and amount. Submission does not mean money has moved — CentsAI verifies the result before updating records."
+          : `Status: ${live.status}${live.result ? ` · ${live.result}` : ""}`}
+      </p>
+      <ApprovalData approval={live} mode={mode} paypalEnvironment={paypalEnvironment} />
+      <ApprovalSteps steps={live.steps} />
+      <ApprovalDraft draft={live.draft} rows={7} />
+      <ApprovalActions approval={live} onDone={close} inline={false} />
     </Modal>
   )
 }

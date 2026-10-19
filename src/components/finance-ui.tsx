@@ -6,7 +6,7 @@ import { money } from "../lib/format"
 import { go } from "../lib/router"
 import { useStore } from "../lib/store"
 import type { Invoice, State } from "../lib/types"
-import { Badge, Button } from "./ui"
+import { Badge, Button, useAction } from "./ui"
 
 export function InvoiceRows({ rows, state, today, onSelect, showPriority }: {
   rows: (Invoice | OpenInvoice)[]
@@ -117,13 +117,14 @@ export function RiskAlert({ fc, threshold, link = true }: { fc: Forecast; thresh
 export function PriorityList({ items, compact }: { items: Priority[]; compact?: boolean }) {
   const { state, today, dismissInsight, prepareReminder, toast, can } = useStore()
   const [expanded, setExpanded] = useState<string | null>(compact ? null : items[0]?.id ?? null)
+  const [dismissingId, setDismissingId] = useState<string | null>(null)
 
-  const draftReminders = async () => {
+  const draftAction = useAction(async () => {
     const overdue = state.invoices.filter((i) => i.status === "Sent" && i.dueDate < today)
     const results = await Promise.all(overdue.map((i) => prepareReminder(i.id, { preparedBy: "CentsAI agent" })))
     const ok = results.filter((r) => r.ok).length
     toast(ok ? `${ok} reminder draft${ok > 1 ? "s" : ""} prepared — review them in Approvals` : results[0]?.message ?? "No overdue invoices")
-  }
+  })
 
   if (items.length === 0) return <div className="empty">Nothing needs your attention right now.</div>
 
@@ -163,15 +164,30 @@ export function PriorityList({ items, compact }: { items: Priority[]; compact?: 
               <Button variant={compact ? "ghost" : "primary"} onClick={() => go(item.action.to)}>
                 {item.action.label} {compact && <ArrowRight size={13} />}
               </Button>
-              {!compact && item.secondary === "draft-reminders" && <Button disabled={!can.prepare} onClick={draftReminders}>Draft reminders</Button>}
+              {!compact && item.secondary === "draft-reminders" && (
+                <Button
+                  disabled={!can.prepare || draftAction.busy}
+                  loading={draftAction.busy}
+                  onClick={() => void draftAction.run()}
+                >
+                  {draftAction.busy ? "Drafting reminders…" : "Draft reminders"}
+                </Button>
+              )}
               {!compact && (
                 <Button
                   variant="ghost"
-                  disabled={!can.edit}
+                  disabled={!can.edit || dismissingId === item.id}
+                  loading={dismissingId === item.id}
                   onClick={async () => {
-                    const res = await dismissInsight(item.id)
-                    if (!res.ok) return toast(res.message)
-                    toast("Insight dismissed")
+                    if (dismissingId) return
+                    setDismissingId(item.id)
+                    try {
+                      const res = await dismissInsight(item.id)
+                      if (!res.ok) return toast(res.message)
+                      toast("Insight dismissed")
+                    } finally {
+                      setDismissingId(null)
+                    }
                   }}
                 >
                   Dismiss

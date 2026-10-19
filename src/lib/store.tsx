@@ -44,7 +44,7 @@ export const ROLE_TIERS: { role: Role; tier: string; detail: string }[] = [
   { role: "Owner", tier: "Execute with approval", detail: "Approves any amount. Every execution is verified and logged." },
 ]
 
-type Result = { ok: boolean; message: string }
+export type Result = { ok: boolean; message: string; id?: string }
 type WorkspacePatch = Parameters<typeof api.patchWorkspace>[0]
 type SettingsPatch = Parameters<typeof api.patchSettings>[0]
 
@@ -56,7 +56,10 @@ export async function runHostedMutation<T>(
   try {
     const value = await operation()
     await refresh()
-    return { ok: true, message: message(value) }
+    const id = value && typeof value === "object" && "id" in value && typeof (value as { id?: unknown }).id === "string"
+      ? (value as { id: string }).id
+      : undefined
+    return { ok: true, message: message(value), id }
   } catch (cause) {
     return {
       ok: false,
@@ -595,7 +598,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (approveNow && s.role === "Owner") {
         return approve(approval.id)
       }
-      return { ok: true, message: s.role === "Owner" ? `${approval.id} added to the approval queue` : "Sent to Owner for approval" }
+      return { ok: true, message: s.role === "Owner" ? `${approval.id} added to the approval queue` : "Sent to Owner for approval", id: approval.id }
     }
 
     const prepareReminder: Store["prepareReminder"] = async (invoiceId, opts = {}, idempotencyKey?: string) => {
@@ -710,7 +713,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           const verified = status === "SENT"
           setApproval(id, { status: verified ? "Verified" : "Failed", result: `PayPal status ${status} · ${link.invoiceId}` })
           log({ actor: "PayPal Sandbox", action: verified ? "Status verified" : "Verification failed", detail: `${a.refId} reported ${status}`, ref: a.refId, outcome: verified ? "success" : "error" })
-          return { ok: verified, message: verified ? `${a.refId} sent via PayPal Sandbox and verified` : `PayPal reported ${status}` }
+          return { ok: verified, message: verified ? `${a.refId} sent via PayPal Sandbox and verified` : `PayPal reported ${status}`, id: a.id }
         }
         if (a.kind === "send_reminder") {
           const inv = fresh().invoices.find((i) => i.id === a.refId)!
@@ -726,11 +729,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           const result = inv.paypal ? "PayPal accepted the reminder" : "Email draft saved (CentsAI doesn't send email in this prototype)"
           setApproval(id, { status: "Verified", result })
           log({ actor: inv.paypal ? "PayPal Sandbox" : actor, action: "Reminder recorded", detail: `${a.refId} · ${channel}`, ref: a.refId, outcome: "success" })
-          return { ok: true, message: result }
+          return { ok: true, message: result, id: a.id }
         }
         if (a.kind === "record_contractor_payment") {
           setApproval(id, { result: "Approved — transfer the money from your bank, then confirm the reference here." })
-          return { ok: true, message: "Approved. Confirm the bank transfer reference to record the payment." }
+          return { ok: true, message: "Approved. Confirm the bank transfer reference to record the payment.", id: a.id }
         }
         if (a.kind === "cancel_subscription") {
           update((d) => {
@@ -739,7 +742,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           })
           setApproval(id, { status: "Verified", result: "Removed from future obligations. Cancel with the vendor as well." })
           log({ actor, action: "Subscription cancelled", detail: `${a.recipient} removed from the forecast`, ref: a.refId, outcome: "success" })
-          return { ok: true, message: `${a.recipient} removed from future obligations` }
+          return { ok: true, message: `${a.recipient} removed from future obligations`, id: a.id }
         }
       } catch (error) {
         setApproval(id, { status: "Failed", result: String(error) })
