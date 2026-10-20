@@ -12,6 +12,8 @@
 
 ![CentsAI dashboard: cash today, a three-scenario forecast and the daily finance briefing](docs/images/dashboard.png)
 
+**[Demo video and full submission package (Google Drive)](https://drive.google.com/drive/folders/14Lmwvp7LSjqkZ0vB5jzAXmBJ5GUXjETo)**
+
 </div>
 
 > **The rule:** the AI explains and prepares. Deterministic code calculates. A person approves. PayPal confirms. Every step is audited.
@@ -205,6 +207,7 @@ docs/             submission documents, evidence CSVs, test report, screenshots
 
 | Document | Contents |
 |---|---|
+| [Submission package (Google Drive)](https://drive.google.com/drive/folders/14Lmwvp7LSjqkZ0vB5jzAXmBJ5GUXjETo) | Demo video and all submission documents |
 | [Technical Documentation](docs/CentsAI-Technical-Documentation.pdf) | System design, calculation methods, AI agent design, PayPal integration, API reference |
 | [Security Self-Assessment](docs/CentsAI-Security-Self-Assessment.pdf) | Permission tiers, threat model, known risks and improvement plan |
 | [Execution Evidence](docs/CentsAI-Execution-Evidence.pdf) | PayPal Sandbox operation logs, verified payments, how to check them |
