@@ -11,20 +11,15 @@ logs/
 *.log
 .claude-replay.*
 .tmp-*
-/.figma/design-context/
 /server/.env
 /server/dist/
 
-# Platform-managed agentplat state, not project source. In the
-# client-initiated single-repo workspace layout (make's `Path: "."` spec) the
-# repo root IS the workspace root, so these land inside this repo rather than
-# beside it.
-/.plugins/
-/.opencode-skills/
-
-# Local tool config
+# Local tool and AI-assistant config
 .claude/
 .tsupgrader/
+/AGENTS.md
+/CLAUDE.md
+/.github/copilot-instructions.md
 
 # Keep env templates
 !.env.example

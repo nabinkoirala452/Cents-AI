@@ -1,4 +1,4 @@
-# CentsAI backend foundation
+# CentsAI API server
 
 ## Requirements
 
@@ -91,8 +91,8 @@ The `managerApprovalLimit` and `team` fields are Owner-only. The
 
 ## Records and computed reads
 
-Owner and Finance Manager can use the record routes listed in
-`docs/backend/SPEC.md` §7 for transactions/imports, clients, projects/time
+Owner and Finance Manager can use the record routes in
+`server/src/modules/records/` for transactions/imports, clients, projects/time
 entries, invoices, employees, contractor bills, recurring costs, loans,
 financing offers, and saved scenarios. Transaction imports accept at most
 5,000 parsed rows at `POST /api/v1/transactions/import`; invalid rows are
